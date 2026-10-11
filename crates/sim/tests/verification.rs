@@ -1,11 +1,11 @@
-//! 検証（docs/plan.md §6：V-01〜V-05）
+//! 検証（docs/plan.md §6：V-01〜V-05、V-09〜V-12）
 
 use sim::integrators::{Integrator, Method};
 use sim::scenarios::{
-    CIRCULAR_BINARY_PERIOD, FIGURE_EIGHT_PERIOD, circular_binary, figure_eight, perturbed,
-    pythagorean,
+    CIRCULAR_BINARY_PERIOD, FIGURE_EIGHT_PERIOD, circular_binary, figure_eight,
+    figure_eight_vertical, hierarchical_inclined, perturbed, pythagorean,
 };
-use sim::{State, Vec2};
+use sim::{State, Vec3};
 
 fn max_position_error(a: &State, b: &State) -> f64 {
     a.positions
@@ -65,7 +65,7 @@ fn v03_momentum_and_angular_momentum_are_conserved() {
             it.advance_to(10.0);
             let dp = (it.state.momentum() - p0).norm();
             assert!(dp < 1e-9, "{method:?}: 運動量のずれ {dp:e}");
-            let dl = (it.state.angular_momentum() - l0).abs();
+            let dl = (it.state.angular_momentum() - l0).norm();
             match method {
                 Method::Leapfrog => assert!(dl < 1e-10, "Leapfrog: 角運動量のずれ {dl:e}"),
                 Method::Rk45 => assert!(dl < 1e-6, "Rk45: 角運動量のずれ {dl:e}"),
@@ -77,7 +77,7 @@ fn v03_momentum_and_angular_momentum_are_conserved() {
     let start = figure_eight();
     let mut it = Integrator::new(start.clone(), Method::Rk4, 1e-3);
     it.advance_to(10.0);
-    assert!((it.state.angular_momentum() - start.angular_momentum()).abs() < 1e-9);
+    assert!((it.state.angular_momentum() - start.angular_momentum()).norm() < 1e-9);
 }
 
 /// S-04 刻み幅一定の RK4 は、接近のあるピタゴラスの三体問題では角運動量が大きくずれる
@@ -86,7 +86,7 @@ fn s04_fixed_step_rk4_drifts_in_close_encounters() {
     let start = pythagorean();
     let mut it = Integrator::new(start.clone(), Method::Rk4, 1e-3);
     it.advance_to(10.0);
-    assert!((it.state.angular_momentum() - start.angular_momentum()).abs() > 1e-3);
+    assert!((it.state.angular_momentum() - start.angular_momentum()).norm() > 1e-3);
 }
 
 /// V-04 全エネルギーのずれが、積分法ごとに想定の範囲に収まる
@@ -173,7 +173,7 @@ fn s03_tiny_perturbation_grows() {
 
 #[test]
 fn vector_basics() {
-    assert_eq!(Vec2::new(3.0, 4.0).norm(), 5.0);
+    assert_eq!(Vec3::new(3.0, 4.0, 0.0).norm(), 5.0);
 }
 
 /// 時刻を細かく何度も進めても止まらない（残り時間が丸め誤差より小さくなっても無限ループにならない）
@@ -226,4 +226,147 @@ fn n06_smaller_step_reduces_rk4_error() {
         fine < coarse / 8.0,
         "dt=0.02: {coarse:e}, dt=0.01: {fine:e}"
     );
+}
+
+/// 回転行列（x 軸の周りに a、z 軸の周りに b）で、状態を空間の中で回す
+fn rotated(mut s: State, a: f64, b: f64) -> State {
+    let rot = |v: Vec3| {
+        let v1 = Vec3::new(
+            v.x,
+            v.y * a.cos() - v.z * a.sin(),
+            v.y * a.sin() + v.z * a.cos(),
+        );
+        Vec3::new(
+            v1.x * b.cos() - v1.y * b.sin(),
+            v1.x * b.sin() + v1.y * b.cos(),
+            v1.z,
+        )
+    };
+    s.positions = s.positions.into_iter().map(rot).collect();
+    s.velocities = s.velocities.into_iter().map(rot).collect();
+    s
+}
+
+/// V-09 8 の字の解を空間の中で傾けても、1 周期後に初期状態に戻る（3 次元の計算が回転に依らない）
+#[test]
+fn v09_tilted_figure_eight_returns_after_one_period() {
+    let start = rotated(figure_eight(), 0.7, 0.3);
+    let mut it = rk45(start.clone(), 1e-12);
+    it.advance_to(FIGURE_EIGHT_PERIOD);
+    assert!(max_position_error(&it.state, &start) < 1e-6);
+}
+
+/// V-10 傾いた面内の二体の円軌道が、1 周期後に元の位置に戻る
+#[test]
+fn v10_inclined_circular_binary_returns_after_one_period() {
+    let start = rotated(circular_binary(), 1.1, -0.4);
+    for (method, dt, tol) in [
+        (Method::Rk4, 1e-3, 1e-9),
+        (Method::Rk45, 1e-3, 1e-8),
+        (Method::Leapfrog, 1e-4, 1e-6),
+    ] {
+        let mut it = Integrator::new(start.clone(), method, dt);
+        it.advance_to(CIRCULAR_BINARY_PERIOD);
+        assert!(max_position_error(&it.state, &start) < tol, "{method:?}");
+    }
+}
+
+/// V-11 N 体（5 体、3 次元）でも、全運動量と全角運動量（ベクトル）が保たれる
+#[test]
+fn v11_five_bodies_conserve_momentum_and_angular_momentum() {
+    let start = State {
+        masses: vec![1.0, 0.8, 0.5, 0.3, 0.2],
+        positions: vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(2.0, 0.1, -0.2),
+            Vec3::new(-1.5, 1.0, 0.3),
+            Vec3::new(0.3, -2.5, 0.5),
+            Vec3::new(-0.4, 0.2, 3.0),
+        ],
+        velocities: vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.6, 0.1),
+            Vec3::new(-0.3, -0.5, 0.0),
+            Vec3::new(0.6, 0.0, -0.1),
+            Vec3::new(0.0, -0.4, 0.0),
+        ],
+    };
+    assert_eq!(start.validate(), Ok(()));
+    let (p0, l0) = (start.momentum(), start.angular_momentum());
+    let mut it = Integrator::new(start, Method::Leapfrog, 1e-3);
+    it.advance_to(5.0);
+    assert!((it.state.momentum() - p0).norm() < 1e-9);
+    assert!((it.state.angular_momentum() - l0).norm() < 1e-10);
+}
+
+/// V-12 3 次元のプリセット：全運動量が 0、平面から外れた動きをする。傾いた階層的三体は、第 3 天体が連星から離れていかない
+#[test]
+fn v12_three_dimensional_presets() {
+    for start in [figure_eight_vertical(), hierarchical_inclined()] {
+        assert_eq!(start.validate(), Ok(()));
+        assert!(start.momentum().norm() < 1e-12);
+        let mut it = rk45(start, 1e-11);
+        let mut max_z: f64 = 0.0;
+        let mut t = 0.0;
+        while t < 30.0 {
+            t += 0.5;
+            it.advance_to(t);
+            max_z = max_z.max(
+                it.state
+                    .positions
+                    .iter()
+                    .map(|p| p.z.abs())
+                    .fold(0.0, f64::max),
+            );
+        }
+        assert!(
+            max_z > 0.05,
+            "平面から外れた動きをする（最大の |z| = {max_z}）"
+        );
+    }
+    let mut it = rk45(hierarchical_inclined(), 1e-11);
+    let mut t = 0.0;
+    while t < 100.0 {
+        t += 1.0;
+        it.advance_to(t);
+        let com = it.state.center_of_mass();
+        let d = (it.state.positions[2] - com).norm();
+        assert!(
+            (3.0..8.0).contains(&d),
+            "時刻 {t}：第 3 天体の重心からの距離 {d}"
+        );
+    }
+}
+
+/// 天体の数は 2〜8
+#[test]
+fn body_count_is_limited() {
+    use sim::{MAX_BODIES, StateError};
+    let mut one = circular_binary();
+    one.masses.truncate(1);
+    one.positions.truncate(1);
+    one.velocities.truncate(1);
+    assert_eq!(one.validate(), Err(StateError::Shape));
+    let n = MAX_BODIES + 1;
+    let many = State {
+        masses: vec![1.0; n],
+        positions: (0..n).map(|i| Vec3::new(i as f64, 0.0, 0.0)).collect(),
+        velocities: vec![Vec3::default(); n],
+    };
+    assert_eq!(many.validate(), Err(StateError::Shape));
+}
+
+/// V-13 3 次元の運動でも、全エネルギーが保たれる（z 方向の成分を含めて計算していること）
+#[test]
+fn v13_energy_is_conserved_in_three_dimensions() {
+    let tilted = rotated(figure_eight(), 0.9, 0.4);
+    for start in [figure_eight_vertical(), hierarchical_inclined(), tilted] {
+        let e0 = start.energy();
+        let mut it = rk45(start, 1e-11);
+        it.advance_to(20.0);
+        let rel = ((it.state.energy() - e0) / e0).abs();
+        assert!(rel < 1e-8, "全エネルギーの相対誤差 {rel:e}");
+    }
+    // 回しても全エネルギーは変わらない（運動エネルギーに z 成分が入っていること）
+    assert!((rotated(figure_eight(), 0.9, 0.4).energy() - figure_eight().energy()).abs() < 1e-12);
 }

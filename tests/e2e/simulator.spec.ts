@@ -14,7 +14,7 @@ async function ready(page: Page) {
 }
 const num = async (page: Page, id: string) => Number(await page.locator(`[data-out="${id}"]`).textContent());
 async function setInitial(page: Page, rows: number[][]) {
-  const fields = ["m", "x", "y", "vx", "vy"];
+  const fields = ["m", "x", "y", "z", "vx", "vy", "vz"];
   for (const [b, row] of rows.entries()) for (const [k, v] of row.entries()) await page.fill(`input[name="b${b}-${fields[k]}"]`, String(v));
 }
 
@@ -45,9 +45,9 @@ test("S-05：プリセットの値が入力欄に入り、書き換えると「�
 test("S-05：自分で決めた初期値で計算できる（質量・位置・速度）", async ({ page }) => {
   await ready(page);
   await setInitial(page, [
-    [1, -1, 0, 0, -0.5],
-    [1, 1, 0, 0, 0.5],
-    [0.01, 0, 3, 0.4, 0],
+    [1, -1, 0, 0, 0, -0.5, 0],
+    [1, 1, 0, 0, 0, 0.5, 0],
+    [0.01, 0, 3, 0.5, 0.4, 0, 0.05],
   ]);
   await page.click("#apply");
   await expect(page.locator("[data-message]")).toHaveText("");
@@ -91,6 +91,7 @@ test("S-03：カオス：ずらす天体と量を選べ、2 つの計算の位�
   await page.selectOption("#chaos-body", "2");
   await page.fill("#chaos-dx", "0");
   await page.fill("#chaos-dy", "1e-4");
+  await page.fill("#chaos-dz", "1e-4");
   await page.click("#apply");
   await expect(page.locator("[data-chaos-legend]")).toBeVisible();
   await expect.poll(() => num(page, "separation"), { timeout: 5000 }).toBeGreaterThan(0);
@@ -137,4 +138,55 @@ test.describe("V-07：アクセシビリティ（axe）と画面幅", () => {
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
     });
   }
+});
+
+test("N 体：天体を 2〜8 個に増減でき、増やした天体で計算できる", async ({ page }) => {
+  await ready(page);
+  await expect(page.locator("[data-initial] tbody tr")).toHaveCount(3);
+  await page.click("#remove-body");
+  await expect(page.locator("[data-initial] tbody tr")).toHaveCount(2);
+  await expect(page.locator("#remove-body")).toBeDisabled();
+  for (let i = 0; i < 6; i++) await page.click("#add-body");
+  await expect(page.locator("[data-initial] tbody tr")).toHaveCount(8);
+  await expect(page.locator("#add-body")).toBeDisabled();
+  await expect(page.locator("#chaos-body option")).toHaveCount(8);
+  // 8 体：x 軸上に並べて静止させる（既定値）→ 重なりはないので計算できる
+  await page.click("#apply");
+  await expect(page.locator("[data-message]")).toHaveText("");
+  await expect.poll(() => num(page, "time"), { timeout: 5000 }).toBeGreaterThan(0.2);
+});
+
+test("3 次元：3 次元のプリセットでは、xz 平面の図にも動きが描かれる", async ({ page }) => {
+  await ready(page);
+  await page.selectOption("#preset", "3");
+  await expect(page.locator('input[name="b2-vz"]')).not.toHaveValue("0");
+  await expect.poll(() => num(page, "time"), { timeout: 8000 }).toBeGreaterThan(3);
+  // 左下（xz 平面）のパネルに、背景と違う色の画素がある
+  const painted = await page.locator("#orbits").evaluate((c: HTMLCanvasElement) => {
+    const g = c.getContext("2d")!;
+    const d = g.getImageData(0, c.height / 2 + 30, c.width / 2, c.height / 2 - 60).data;
+    let count = 0;
+    for (let i = 0; i < d.length; i += 4 * 31) if (Math.abs(d[i] - d[0]) + Math.abs(d[i + 1] - d[1]) + Math.abs(d[i + 2] - d[2]) > 60) count++;
+    return count;
+  });
+  expect(painted).toBeGreaterThan(20);
+});
+
+test("3 次元：立体図をドラッグと矢印キーで回せる", async ({ page }) => {
+  await ready(page);
+  await page.click("#play"); // 一時停止して、画像の変化が回転だけによるものにする
+  const snapshot = () => page.locator("#orbits").evaluate((c: HTMLCanvasElement) => c.toDataURL());
+  const before = await snapshot();
+  const box = (await page.locator("#orbits").boundingBox())!;
+  await page.mouse.move(box.x + box.width * 0.25, box.y + box.height * 0.25);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.35, box.y + box.height * 0.3, { steps: 5 });
+  await page.mouse.up();
+  const dragged = await snapshot();
+  expect(dragged).not.toBe(before);
+  await page.locator("#orbits").focus();
+  await page.keyboard.press("ArrowRight");
+  expect(await snapshot()).not.toBe(dragged);
+  await page.click("#view-reset");
+  expect(await snapshot()).toBe(before);
 });

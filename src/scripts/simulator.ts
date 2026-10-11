@@ -1,35 +1,37 @@
-// 図 1（シミュレーター）と図 2（全エネルギーの相対誤差）。計算はすべて WebAssembly（crates/sim）で行う（C-03）。
-// 初期値（質量・位置・速度）は利用者が入力でき、有名シナリオはその入力欄に値を入れるプリセットとして扱う（S-05）。
+// 図 1（4 面図のシミュレーター）と図 2（全エネルギーの相対誤差）。計算はすべて WebAssembly（crates/sim）で行う（C-03）。
+// 天体の数（2〜8）と、各天体の質量・位置・速度（3 次元）を利用者が入力できる。有名シナリオは入力欄に値を入れるプリセット（S-05）。
 
 interface SimExports {
   memory: WebAssembly.Memory;
+  sim_max_bodies(): number;
   sim_input(): number;
   sim_load_preset(scenario: number): number;
-  sim_init(slot: number, method: number, dt: number, tolerance: number): number;
+  sim_init(slot: number, n: number, method: number, dt: number, tolerance: number): number;
   sim_advance(slot: number, t: number): void;
   sim_time(slot: number): number;
   sim_energy(slot: number): number;
-  sim_angular_momentum(slot: number): number;
+  sim_angular_momentum(slot: number, component: number): number;
   sim_steps(slot: number): number;
   sim_dt(slot: number): number;
-  sim_com_x(slot: number): number;
-  sim_com_y(slot: number): number;
+  sim_com(slot: number, component: number): number;
   sim_positions(slot: number): number;
 }
 
-const BODIES = 3;
-const FIELDS = ["m", "x", "y", "vx", "vy"] as const;
-const TRAIL = 4000;
+type V3 = [number, number, number];
+const FIELDS = ["m", "x", "y", "z", "vx", "vy", "vz"] as const;
+const FIELD_LABELS: Record<(typeof FIELDS)[number], string> = { m: "質量", x: "位置 x", y: "位置 y", z: "位置 z", vx: "速度 vx", vy: "速度 vy", vz: "速度 vz" };
+const TRAIL = 3000;
 const MAIN = 0;
 const CHAOS = 1;
 const COMPARE = [2, 3, 4];
 const METHOD_NAMES = ["RK4", "RK45 (Dormand–Prince)", "Leapfrog"];
 const INIT_ERRORS: Record<number, string> = {
-  0: "積分法・刻み幅・許容誤差を確かめてください（刻み幅と許容誤差は正の数）。",
+  0: "天体の数・積分法・刻み幅・許容誤差を確かめてください（刻み幅と許容誤差は正の数）。",
   2: "質量は正の数にしてください。",
   3: "数値として読めない値があります。",
   4: "2 つの天体が同じ位置にあります。位置をずらしてください。",
 };
+const DEFAULT_VIEW = { az: -0.6, el: 0.45 };
 
 const $ = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
 const root = $<HTMLElement>("[data-simulator]");
@@ -42,68 +44,122 @@ const tolInput = $<HTMLInputElement>("#tolerance");
 const speedSelect = $<HTMLSelectElement>("#speed");
 const chaosToggle = $<HTMLInputElement>("#chaos");
 const chaosBody = $<HTMLSelectElement>("#chaos-body");
-const chaosDx = $<HTMLInputElement>("#chaos-dx");
-const chaosDy = $<HTMLInputElement>("#chaos-dy");
+const chaosDelta = (axis: "x" | "y" | "z") => $<HTMLInputElement>(`#chaos-d${axis}`);
 const playButton = $<HTMLButtonElement>("#play");
 const applyButton = $<HTMLButtonElement>("#apply");
+const addBodyButton = $<HTMLButtonElement>("#add-body");
+const removeBodyButton = $<HTMLButtonElement>("#remove-body");
 const compareButton = $<HTMLButtonElement>("#compare");
 const compareUntil = $<HTMLInputElement>("#compare-until");
+const tableBody = $<HTMLTableSectionElement>("[data-initial] tbody");
 const message = $<HTMLElement>("[data-message]");
 const out = (id: string) => $<HTMLElement>(`[data-out="${id}"]`);
-const cell = (body: number, field: string) => $<HTMLInputElement>(`input[name="b${body}-${field}"]`);
 
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const colors = () => [css("--series-1"), css("--series-2"), css("--series-3")];
+const colorOf = (i: number) => css(`--series-${(i % 8) + 1}`);
 const fmt = (v: number, digits = 3) => (Number.isFinite(v) ? v.toExponential(digits - 1) : "—");
 
 let wasm: SimExports;
+let maxBodies = 8;
+let bodies = 3;
 let playing = false;
 let simTime = 0;
 let lastFrame = 0;
+let lastSample = -Infinity;
 let slots: number[] = [MAIN];
-let trails: [number, number][][][] = [];
+/** 軌跡：計算（スロット）→ 天体 → 点の列（重心を引いた座標） */
+let trails: V3[][][] = [];
 let e0: number[] = [];
-let l0: number[] = [];
+let l0: V3[] = [];
 let masses: number[] = [];
-let view = { cx: 0, cy: 0, half: 1.5 };
-/** 図 2 の系列：計算ごとの [時刻, 相対誤差] */
+let view = { ...DEFAULT_VIEW, half: 1.5, zoom: 1 };
 let energySeries: { label: string; color: number; dashed: boolean; points: [number, number][] }[] = [];
 
-function readInputs(): number[] | null {
-  const values: number[] = [];
-  for (let b = 0; b < BODIES; b++) for (const f of FIELDS) values.push(Number(cell(b, f).value));
-  return values.every(Number.isFinite) ? values : null;
+// ---- 初期値の表 ----
+function renderRows(n: number): void {
+  const old = readTable();
+  tableBody.replaceChildren(
+    ...Array.from({ length: n }, (_, b) => {
+      const tr = document.createElement("tr");
+      const th = document.createElement("th");
+      th.scope = "row";
+      const sw = document.createElement("span");
+      sw.className = `swatch s${b + 1}`;
+      th.append(sw, `天体 ${b + 1}`);
+      tr.append(th);
+      for (const f of FIELDS) {
+        const td = document.createElement("td");
+        const input = document.createElement("input");
+        input.type = "number";
+        input.step = "any";
+        input.inputMode = "decimal";
+        input.name = `b${b}-${f}`;
+        input.setAttribute("aria-label", `天体 ${b + 1} の ${FIELD_LABELS[f]}`);
+        input.value = old[b]?.[FIELDS.indexOf(f)] ?? (f === "m" ? "1" : f === "x" ? String(b) : "0");
+        input.addEventListener("input", () => (presetSelect.value = "-1"));
+        td.append(input);
+        tr.append(td);
+      }
+      return tr;
+    }),
+  );
+  bodies = n;
+  addBodyButton.disabled = n >= maxBodies;
+  removeBodyButton.disabled = n <= 2;
+  chaosBody.replaceChildren(
+    ...Array.from({ length: n }, (_, b) => {
+      const o = document.createElement("option");
+      o.value = String(b);
+      o.textContent = `天体 ${b + 1}`;
+      return o;
+    }),
+  );
 }
 
-function writeInputs(values: ArrayLike<number>): void {
-  for (let b = 0; b < BODIES; b++) FIELDS.forEach((f, k) => (cell(b, f).value = String(Number(values[b * FIELDS.length + k].toPrecision(10)))));
+function readTable(): string[][] {
+  return Array.from(tableBody.querySelectorAll("tr"), (tr) => Array.from(tr.querySelectorAll("input"), (i) => i.value));
+}
+
+function readInputs(): number[] | null {
+  const values = readTable().flat().map(Number);
+  return values.length === bodies * FIELDS.length && values.every(Number.isFinite) ? values : null;
 }
 
 function inputBuffer(): Float64Array {
-  return new Float64Array(wasm.memory.buffer, wasm.sim_input(), BODIES * FIELDS.length);
+  return new Float64Array(wasm.memory.buffer, wasm.sim_input(), maxBodies * FIELDS.length);
 }
 
 function loadPreset(): void {
   const id = Number(presetSelect.value);
-  if (id < 0) return; // 「自分で入力」
-  wasm.sim_load_preset(id);
-  writeInputs(inputBuffer());
-  if (id === 0) dtInput.value = "0.01";
-  if (id === 1) dtInput.value = "0.001";
+  if (id < 0) return;
+  const n = wasm.sim_load_preset(id);
+  const buffer = inputBuffer();
+  tableBody.replaceChildren();
+  renderRows(n);
+  readTable().forEach((row, b) =>
+    row.forEach((_, k) => {
+      const input = tableBody.querySelector<HTMLInputElement>(`input[name="b${b}-${FIELDS[k]}"]`)!;
+      input.value = String(Number(buffer[b * FIELDS.length + k].toPrecision(10)));
+    }),
+  );
+  dtInput.value = id === 1 ? "0.001" : "0.01";
 }
 
-function positions(slot: number): number[] {
-  return Array.from(new Float64Array(wasm.memory.buffer, wasm.sim_positions(slot), BODIES * 2));
+// ---- 計算 ----
+function positions(slot: number): V3[] {
+  const raw = new Float64Array(wasm.memory.buffer, wasm.sim_positions(slot), bodies * 3);
+  return Array.from({ length: bodies }, (_, i): V3 => [raw[3 * i], raw[3 * i + 1], raw[3 * i + 2]]);
 }
+const com = (slot: number): V3 => [0, 1, 2].map((k) => wasm.sim_com(slot, k)) as V3;
+const angular = (slot: number): V3 => [0, 1, 2].map((k) => wasm.sim_angular_momentum(slot, k)) as V3;
 
 function settings() {
   return { method: Number(methodSelect.value), dt: Number(dtInput.value), tolerance: Number(tolInput.value) };
 }
 
-/** 入力の値で計算器を用意する。失敗したら理由を表示して false */
 function initSlot(slot: number, values: number[], method: number, dt: number, tolerance: number): boolean {
   inputBuffer().set(values);
-  const code = wasm.sim_init(slot, method, dt, tolerance);
+  const code = wasm.sim_init(slot, bodies, method, dt, tolerance);
   if (code !== 1) {
     message.textContent = INIT_ERRORS[code] ?? "初期値を確かめてください。";
     return false;
@@ -113,10 +169,14 @@ function initSlot(slot: number, values: number[], method: number, dt: number, to
 
 function perturbed(values: number[]): number[] {
   const copy = [...values];
-  const body = Number(chaosBody.value);
-  copy[body * FIELDS.length + 1] += Number(chaosDx.value);
-  copy[body * FIELDS.length + 2] += Number(chaosDy.value);
+  const b = Number(chaosBody.value);
+  (["x", "y", "z"] as const).forEach((axis, k) => (copy[b * FIELDS.length + 1 + k] += Number(chaosDelta(axis).value)));
   return copy;
+}
+
+function relativePositions(slot: number): V3[] {
+  const c = com(MAIN);
+  return positions(slot).map(([x, y, z]): V3 => [x - c[0], y - c[1], z - c[2]]);
 }
 
 function apply(): void {
@@ -131,22 +191,22 @@ function apply(): void {
   slots = chaosToggle.checked ? [MAIN, CHAOS] : [MAIN];
   if (!initSlot(MAIN, values, method, dt, tolerance)) return;
   if (chaosToggle.checked && !initSlot(CHAOS, perturbed(values), method, dt, tolerance)) return;
-  masses = [0, 1, 2].map((b) => values[b * FIELDS.length]);
-  e0 = [];
-  l0 = [];
+  masses = Array.from({ length: bodies }, (_, b) => values[b * FIELDS.length]);
   for (const s of slots) {
     e0[s] = wasm.sim_energy(s);
-    l0[s] = wasm.sim_angular_momentum(s);
+    l0[s] = angular(s);
   }
   simTime = 0;
-  trails = slots.map((s) => {
-    const p = positions(s);
-    return [0, 1, 2].map((i): [number, number][] => [[p[2 * i], p[2 * i + 1]]]);
-  });
-  // 表示の範囲：重心を中心に、初期位置がゆとりをもって収まるように（動きに合わせて広げる）
-  view = { cx: wasm.sim_com_x(MAIN), cy: wasm.sim_com_y(MAIN), half: 0 };
+  lastSample = -Infinity;
+  trails = slots.map((s) => relativePositions(s).map((p) => [p]));
+  view.half = 0;
   fitView();
-  energySeries = slots.map((s, k) => ({ label: k === 0 ? METHOD_NAMES[method] : `${METHOD_NAMES[method]}（ずらした初期値）`, color: method, dashed: k === 1, points: [] }));
+  energySeries = slots.map((_, k) => ({
+    label: k === 0 ? METHOD_NAMES[method] : `${METHOD_NAMES[method]}（ずらした初期値）`,
+    color: method,
+    dashed: k === 1,
+    points: [],
+  }));
   $<HTMLElement>("[data-chaos-legend]").hidden = !chaosToggle.checked;
   drawOrbits();
   drawEnergy();
@@ -156,77 +216,119 @@ function apply(): void {
 }
 
 function fitView(): void {
-  const aspect = orbits.height / orbits.width;
   let need = view.half;
   for (const trail of trails) for (const body of trail) {
-    const [x, y] = body[body.length - 1];
-    need = Math.max(need, Math.abs(x - view.cx) * 1.15, (Math.abs(y - view.cy) * 1.15) / aspect);
+    const p = body[body.length - 1];
+    need = Math.max(need, ...p.map((v) => Math.abs(v) * 1.15));
   }
   view.half = Math.max(need, 0.5);
 }
 
-function toScreen(x: number, y: number): [number, number] {
-  const scale = orbits.width / (2 * view.half);
-  return [orbits.width / 2 + (x - view.cx) * scale, orbits.height / 2 - (y - view.cy) * scale];
+// ---- 4 面図 ----
+interface Panel {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  title: string;
+  project: (p: V3) => [number, number];
+  axes: [string, V3][];
 }
 
-function niceStep(range: number): number {
-  const raw = range / 6;
-  const pow = 10 ** Math.floor(Math.log10(raw));
-  return [1, 2, 5, 10].map((m) => m * pow).find((s) => s >= raw) ?? raw;
+function rotate([x, y, z]: V3): [number, number] {
+  const { az, el } = view;
+  const x1 = x * Math.cos(az) - y * Math.sin(az);
+  const y1 = x * Math.sin(az) + y * Math.cos(az);
+  return [x1, y1 * Math.sin(el) + z * Math.cos(el)];
+}
+
+function panels(): Panel[] {
+  const w = orbits.width / 2;
+  const h = orbits.height / 2;
+  return [
+    { x: 0, y: 0, w, h, title: "3D（ドラッグで回転）", project: rotate, axes: [["x", [1, 0, 0]], ["y", [0, 1, 0]], ["z", [0, 0, 1]]] },
+    { x: w, y: 0, w, h, title: "xy", project: ([x, y]) => [x, y], axes: [["x", [1, 0, 0]], ["y", [0, 1, 0]]] },
+    { x: 0, y: h, w, h, title: "xz", project: ([x, , z]) => [x, z], axes: [["x", [1, 0, 0]], ["z", [0, 0, 1]]] },
+    { x: w, y: h, w, h, title: "yz", project: ([, y, z]) => [y, z], axes: [["y", [0, 1, 0]], ["z", [0, 0, 1]]] },
+  ];
 }
 
 function drawOrbits(): void {
   const g = orbits.getContext("2d")!;
-  const c = colors();
   g.fillStyle = css("--paper");
   g.fillRect(0, 0, orbits.width, orbits.height);
-  g.strokeStyle = css("--grid");
-  g.lineWidth = 1;
-  const step = niceStep(2 * view.half);
-  const aspect = orbits.height / orbits.width;
-  for (let u = Math.floor((view.cx - view.half) / step) * step; u <= view.cx + view.half; u += step) {
-    const [x] = toScreen(u, 0);
+  const half = view.half / view.zoom;
+  const current = slots.map((s) => relativePositions(s));
+  for (const panel of panels()) {
+    const scale = Math.min(panel.w, panel.h) / (2 * half);
+    const cx = panel.x + panel.w / 2;
+    const cy = panel.y + panel.h / 2;
+    const toScreen = (p: V3): [number, number] => {
+      const [u, v] = panel.project(p);
+      return [cx + u * scale, cy - v * scale];
+    };
+    g.save();
     g.beginPath();
-    g.moveTo(x, 0);
-    g.lineTo(x, orbits.height);
-    g.stroke();
-  }
-  for (let u = Math.floor((view.cy - view.half * aspect) / step) * step; u <= view.cy + view.half * aspect; u += step) {
-    const [, y] = toScreen(0, u);
-    g.beginPath();
-    g.moveTo(0, y);
-    g.lineTo(orbits.width, y);
-    g.stroke();
-  }
-  slots.forEach((slot, s) => {
-    const p = positions(slot);
-    for (let i = 0; i < BODIES; i++) {
-      g.setLineDash(s === 1 ? [6, 5] : []);
-      g.strokeStyle = c[i];
-      g.lineWidth = s === 1 ? 1.5 : 2;
+    g.rect(panel.x, panel.y, panel.w, panel.h);
+    g.clip();
+    // 座標軸（原点 = 重心）
+    g.lineWidth = 1;
+    for (const [name, dir] of panel.axes) {
+      const [ex, ey] = toScreen(dir.map((d) => d * half * 0.8) as V3);
+      g.strokeStyle = css("--rule");
       g.beginPath();
-      trails[s][i].forEach(([x, y], k) => {
-        const [sx, sy] = toScreen(x, y);
-        if (k === 0) g.moveTo(sx, sy);
-        else g.lineTo(sx, sy);
-      });
+      g.moveTo(cx, cy);
+      g.lineTo(ex, ey);
       g.stroke();
-      g.setLineDash([]);
-      const [sx, sy] = toScreen(p[2 * i], p[2 * i + 1]);
-      g.fillStyle = c[i];
-      g.strokeStyle = css("--paper");
-      g.lineWidth = 2;
-      g.beginPath();
-      g.arc(sx, sy, 3 + 2.5 * Math.cbrt(masses[i] / Math.max(...masses)) * 2, 0, 2 * Math.PI);
-      g.fill();
-      g.stroke();
+      g.fillStyle = css("--muted");
+      g.font = `18px ${css("--font-body")}`;
+      g.fillText(name, ex + 4, ey - 4);
     }
-  });
-  // 目盛りの値（左下に、1 目盛りの長さ）
+    slots.forEach((_, s) => {
+      for (let i = 0; i < bodies; i++) {
+        g.setLineDash(s === 1 ? [6, 5] : []);
+        g.strokeStyle = colorOf(i);
+        g.lineWidth = s === 1 ? 1.2 : 1.6;
+        g.beginPath();
+        trails[s][i].forEach((p, k) => {
+          const [sx, sy] = toScreen(p);
+          if (k === 0) g.moveTo(sx, sy);
+          else g.lineTo(sx, sy);
+        });
+        g.stroke();
+        g.setLineDash([]);
+        const [sx, sy] = toScreen(current[s][i]);
+        g.fillStyle = colorOf(i);
+        g.strokeStyle = css("--paper");
+        g.lineWidth = 2;
+        g.beginPath();
+        g.arc(sx, sy, 3 + 4 * Math.cbrt(masses[i] / Math.max(...masses)), 0, 2 * Math.PI);
+        g.fill();
+        g.stroke();
+        if (s === 0) {
+          // 番号を添える（色だけに頼らない）
+          g.fillStyle = css("--text");
+          g.font = `16px ${css("--font-body")}`;
+          g.fillText(String(i + 1), sx + 8, sy - 6);
+        }
+      }
+    });
+    g.restore();
+    g.fillStyle = css("--text");
+    g.font = `20px ${css("--font-body")}`;
+    g.fillText(panel.title, panel.x + 10, panel.y + 24);
+  }
+  g.strokeStyle = css("--rule");
+  g.lineWidth = 1;
+  g.beginPath();
+  g.moveTo(orbits.width / 2, 0);
+  g.lineTo(orbits.width / 2, orbits.height);
+  g.moveTo(0, orbits.height / 2);
+  g.lineTo(orbits.width, orbits.height / 2);
+  g.stroke();
   g.fillStyle = css("--muted");
-  g.font = `20px ${css("--font-body")}`;
-  g.fillText(`grid = ${step} (G = 1 units)`, 12, orbits.height - 12);
+  g.font = `16px ${css("--font-body")}`;
+  g.fillText(`axis length = ${(half * 0.8).toPrecision(2)} (G = 1 units), origin = center of mass`, 10, orbits.height - 10);
 }
 
 function relativeEnergyError(slot: number): number {
@@ -238,19 +340,17 @@ function updateReadout(): void {
   out("steps").textContent = wasm.sim_steps(MAIN).toLocaleString("ja-JP");
   out("dt").textContent = fmt(wasm.sim_dt(MAIN));
   out("energy").textContent = fmt(relativeEnergyError(MAIN));
-  out("angular").textContent = fmt(Math.abs(wasm.sim_angular_momentum(MAIN) - l0[MAIN]));
+  const l = angular(MAIN);
+  out("angular").textContent = fmt(Math.hypot(l[0] - l0[MAIN][0], l[1] - l0[MAIN][1], l[2] - l0[MAIN][2]));
   if (slots.length === 2) {
     const a = positions(MAIN);
     const b = positions(CHAOS);
-    let worst = 0;
-    for (let i = 0; i < BODIES; i++) worst = Math.max(worst, Math.hypot(a[2 * i] - b[2 * i], a[2 * i + 1] - b[2 * i + 1]));
-    out("separation").textContent = fmt(worst);
+    out("separation").textContent = fmt(Math.max(...a.map((p, i) => Math.hypot(p[0] - b[i][0], p[1] - b[i][1], p[2] - b[i][2]))));
   } else {
     out("separation").textContent = "—";
   }
 }
 
-let lastSample = -Infinity;
 function frame(now: number): void {
   if (!playing) return;
   const elapsed = Math.min((now - lastFrame) / 1000, 0.1);
@@ -258,19 +358,16 @@ function frame(now: number): void {
   simTime += elapsed * Number(speedSelect.value);
   slots.forEach((slot, s) => {
     wasm.sim_advance(slot, simTime);
-    const p = positions(slot);
-    for (let i = 0; i < BODIES; i++) {
-      trails[s][i].push([p[2 * i], p[2 * i + 1]]);
+    relativePositions(slot).forEach((p, i) => {
+      trails[s][i].push(p);
       if (trails[s][i].length > TRAIL) trails[s][i].shift();
-    }
+    });
   });
   if (simTime - lastSample > 0.02) {
     lastSample = simTime;
     slots.forEach((slot, s) => energySeries[s].points.push([simTime, relativeEnergyError(slot)]));
     drawEnergy();
   }
-  view.cx = wasm.sim_com_x(MAIN);
-  view.cy = wasm.sim_com_y(MAIN);
   fitView();
   drawOrbits();
   updateReadout();
@@ -287,12 +384,59 @@ function setPlaying(value: boolean): void {
   }
 }
 
-/** 図 2：時刻ごとの全エネルギーの相対誤差（縦軸は対数） */
+// ---- 視点の操作（ドラッグ、キーボード、ボタン） ----
+function setupViewControls(): void {
+  let drag: { x: number; y: number } | null = null;
+  orbits.addEventListener("pointerdown", (e) => {
+    const rect = orbits.getBoundingClientRect();
+    const inside3d = e.clientX - rect.left < rect.width / 2 && e.clientY - rect.top < rect.height / 2;
+    if (!inside3d) return;
+    drag = { x: e.clientX, y: e.clientY };
+    orbits.setPointerCapture(e.pointerId);
+  });
+  orbits.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    view.az += (e.clientX - drag.x) * 0.01;
+    view.el = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, view.el + (e.clientY - drag.y) * 0.01));
+    drag = { x: e.clientX, y: e.clientY };
+    drawOrbits();
+  });
+  orbits.addEventListener("pointerup", () => (drag = null));
+  orbits.addEventListener("keydown", (e) => {
+    const step = 0.1;
+    if (e.key === "ArrowLeft") view.az -= step;
+    else if (e.key === "ArrowRight") view.az += step;
+    else if (e.key === "ArrowUp") view.el = Math.min(Math.PI / 2, view.el + step);
+    else if (e.key === "ArrowDown") view.el = Math.max(-Math.PI / 2, view.el - step);
+    else return;
+    e.preventDefault();
+    drawOrbits();
+  });
+  $<HTMLButtonElement>("#zoom-in").addEventListener("click", () => {
+    view.zoom *= 1.25;
+    drawOrbits();
+  });
+  $<HTMLButtonElement>("#zoom-out").addEventListener("click", () => {
+    view.zoom /= 1.25;
+    drawOrbits();
+  });
+  $<HTMLButtonElement>("#view-reset").addEventListener("click", () => {
+    Object.assign(view, DEFAULT_VIEW, { zoom: 1 });
+    drawOrbits();
+  });
+}
+
+// ---- 図 2 ----
+function niceStep(range: number): number {
+  const raw = range / 6;
+  const pow = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 5, 10].map((m) => m * pow).find((s) => s >= raw) ?? raw;
+}
+
 function drawEnergy(): void {
   const g = energyCanvas.getContext("2d")!;
   const { width, height } = energyCanvas;
   const pad = { left: 96, right: 16, top: 16, bottom: 64 };
-  const c = colors();
   g.fillStyle = css("--paper");
   g.fillRect(0, 0, width, height);
   const all = energySeries.flatMap((s) => s.points);
@@ -325,7 +469,6 @@ function drawEnergy(): void {
     g.stroke();
     g.fillText(String(Number(t.toPrecision(6))), x(t) - 8, height - pad.bottom + 24);
   }
-  // 軸のラベル（英語）
   g.fillStyle = css("--text");
   g.fillText("Time t (G = 1 units)", width / 2 - 90, height - 8);
   g.save();
@@ -334,7 +477,7 @@ function drawEnergy(): void {
   g.fillText("Relative energy error |ΔE / E₀|", 0, 0);
   g.restore();
   for (const series of energySeries) {
-    g.strokeStyle = c[series.color];
+    g.strokeStyle = colorOf(series.color);
     g.lineWidth = 2.5;
     g.setLineDash(series.dashed ? [6, 5] : []);
     g.beginPath();
@@ -342,8 +485,7 @@ function drawEnergy(): void {
     g.stroke();
   }
   g.setLineDash([]);
-  const legend = $<HTMLUListElement>("[data-energy-legend]");
-  legend.replaceChildren(
+  $<HTMLUListElement>("[data-energy-legend]").replaceChildren(
     ...energySeries.map((s) => {
       const li = document.createElement("li");
       const sw = document.createElement("span");
@@ -354,7 +496,6 @@ function drawEnergy(): void {
   );
 }
 
-/** 同じ初期値・同じ刻み幅で、3 つの積分法を重ねて描く */
 function compare(): void {
   const values = readInputs();
   if (!values) return;
@@ -410,19 +551,25 @@ function syncMethodFields(): void {
 async function main(): Promise<void> {
   const { instance } = await WebAssembly.instantiateStreaming(fetch(root.dataset.wasmUrl!), {});
   wasm = instance.exports as unknown as SimExports;
+  maxBodies = wasm.sim_max_bodies();
   presetSelect.addEventListener("change", () => {
     loadPreset();
     apply();
   });
-  // 入力欄を書き換えたら、プリセットは「自分で入力」にする
-  root.querySelectorAll<HTMLInputElement>("[data-initial] input").forEach((input) =>
-    input.addEventListener("input", () => (presetSelect.value = "-1")),
-  );
+  addBodyButton.addEventListener("click", () => {
+    presetSelect.value = "-1";
+    renderRows(bodies + 1);
+  });
+  removeBodyButton.addEventListener("click", () => {
+    presetSelect.value = "-1";
+    renderRows(bodies - 1);
+  });
   methodSelect.addEventListener("change", syncMethodFields);
   chaosToggle.addEventListener("change", () => ($<HTMLElement>("[data-chaos-fields]").hidden = !chaosToggle.checked));
   applyButton.addEventListener("click", apply);
   playButton.addEventListener("click", () => setPlaying(!playing));
   compareButton.addEventListener("click", compare);
+  setupViewControls();
   syncMethodFields();
   loadPreset();
   root.dataset.ready = "true";

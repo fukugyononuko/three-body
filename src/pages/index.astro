@@ -5,7 +5,7 @@ import "../styles/math-font.css";
 import { tex } from "../lib/tex";
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 const title = "三体問題シミュレーター";
-const description = "3 つの天体が重力で引き合う三体問題を、Rust で数値計算し、WebAssembly でブラウザ上に描きます。初期値・積分法・刻み幅を選べ、全エネルギーの誤差やカオスも確かめられます。";
+const description = "天体が重力で引き合う三体問題（N 体問題）を、Rust で数値計算し、WebAssembly でブラウザ上に 3 次元で描きます。天体の数・初期値・積分法・刻み幅を選べ、全エネルギーの誤差やカオスも確かめられます。";
 ---
 <!doctype html>
 <html lang="ja">
@@ -25,22 +25,25 @@ const description = "3 つの天体が重力で引き合う三体問題を、Rus
     </header>
     <main id="main">
       <p class="abstract">
-        <strong>概要</strong>　3 つの天体が互いに重力で引き合う「三体問題」は、一般には式で解けず、数値計算で追うしかありません。
-        このページでは、運動方程式を Rust で数値的に解き、WebAssembly にしてブラウザ上で動かしています。
-        初期値（質量・位置・速度）、積分法、刻み幅を選んで計算し、全エネルギーの誤差や、初期値のわずかな違いが大きく育つカオスを、
+        <strong>概要</strong>　天体が互いに重力で引き合う「三体問題」は、一般には式で解けず、数値計算で追うしかありません。
+        このページでは、運動方程式を Rust で数値的に解き、WebAssembly にしてブラウザ上で 3 次元に描いています。
+        天体の数（2〜8）、初期値（質量・位置・速度）、積分法、刻み幅を選んで計算し、全エネルギーの誤差や、初期値のわずかな違いが大きく育つカオスを、
         実際に計算しながら確かめられます。8 の字を描く周期解や、ピタゴラスの三体問題もプリセットとして選べます。
       </p>
 
       <section aria-labelledby="sim-heading" data-simulator data-wasm-url={`${base}/sim.wasm`}>
         <h2 id="sim-heading">1. シミュレーター</h2>
         <p>
-          3 つの天体の質量・位置・速度を決めて計算します（運動は 1 つの平面内とします）。有名な解はプリセットから選べ、そこから値を書き換えても構いません。
+          天体の数（2〜8）と、各天体の質量・位置・速度を決めて計算します。運動は 3 次元です。
+          有名な解はプリセットから選べ、そこから値を書き換えても構いません。
         </p>
         <div class="controls">
           <label>プリセット
             <select id="preset">
               <option value="0">8 の字の解</option>
               <option value="1">ピタゴラスの三体問題</option>
+              <option value="2">8 の字の解＋垂直の速度（3 次元）</option>
+              <option value="3">傾いた連星＋第 3 天体（3 次元）</option>
               <option value="-1">自分で入力</option>
             </select>
           </label>
@@ -69,28 +72,22 @@ const description = "3 つの天体が重力で引き合う三体問題を、Rus
         <div class="table-scroll" data-initial>
           <table class="initial">
             <caption class="note">初期値（重力定数 G = 1 の無次元の単位）</caption>
-            <thead><tr><th scope="col">天体</th><th scope="col">質量 m</th><th scope="col">位置 x</th><th scope="col">位置 y</th><th scope="col">速度 v<sub>x</sub></th><th scope="col">速度 v<sub>y</sub></th></tr></thead>
-            <tbody>
-              {[0, 1, 2].map((b) => (
-                <tr>
-                  <th scope="row"><span class:list={["swatch", `s${b + 1}`]}></span>天体 {b + 1}</th>
-                  {["m", "x", "y", "vx", "vy"].map((f) => (
-                    <td><input name={`b${b}-${f}`} type="number" inputmode="decimal" step="any" aria-label={`天体 ${b + 1} の ${{ m: "質量", x: "位置 x", y: "位置 y", vx: "速度 vx", vy: "速度 vy" }[f]}`} /></td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
+            <thead><tr><th scope="col">天体</th><th scope="col">質量 m</th><th scope="col">x</th><th scope="col">y</th><th scope="col">z</th><th scope="col">v<sub>x</sub></th><th scope="col">v<sub>y</sub></th><th scope="col">v<sub>z</sub></th></tr></thead>
+            <tbody></tbody>
           </table>
+        </div>
+        <div class="controls">
+          <button id="add-body" type="button">天体を足す</button>
+          <button id="remove-body" type="button">天体を減らす</button>
         </div>
         <fieldset>
           <legend>カオス（初期値の小さな違いが育つ様子）</legend>
           <label class="check"><input id="chaos" type="checkbox" /> 初期値を少しずらした計算を、破線で重ねる</label>
           <div class="controls" data-chaos-fields hidden>
-            <label>ずらす天体
-              <select id="chaos-body"><option value="0">天体 1</option><option value="1">天体 2</option><option value="2">天体 3</option></select>
-            </label>
-            <label>x 方向のずれ Δx<input id="chaos-dx" type="number" step="any" value="1e-6" /></label>
-            <label>y 方向のずれ Δy<input id="chaos-dy" type="number" step="any" value="0" /></label>
+            <label>ずらす天体<select id="chaos-body"></select></label>
+            <label>Δx<input id="chaos-dx" type="number" step="any" value="1e-6" /></label>
+            <label>Δy<input id="chaos-dy" type="number" step="any" value="0" /></label>
+            <label>Δz<input id="chaos-dz" type="number" step="any" value="0" /></label>
           </div>
         </fieldset>
         <div class="controls">
@@ -99,13 +96,16 @@ const description = "3 つの天体が重力で引き合う三体問題を、Rus
         </div>
         <p data-message role="status"></p>
         <figure>
-          <canvas id="orbits" width="960" height="540" role="img" aria-label="3 つの天体の軌道。天体は色で区別し、線はこれまでの軌跡を表す"></canvas>
+          <canvas id="orbits" width="960" height="840" tabindex="0" role="img" aria-label="天体の軌道の 4 面図。左上が立体図（ドラッグか矢印キーで回転）、右上が xy 平面、左下が xz 平面、右下が yz 平面への投影。天体は色と番号で区別する"></canvas>
+          <div class="controls">
+            <button id="zoom-in" type="button">拡大</button>
+            <button id="zoom-out" type="button">縮小</button>
+            <button id="view-reset" type="button">視点を戻す</button>
+          </div>
           <figcaption>
-            図 1　天体の軌道。表示の中心は重心で、天体が離れると表示の範囲を広げる。円は天体の現在の位置で、大きさは質量に応じる。
+            図 1　天体の軌道の 4 面図。左上：立体図（ドラッグか、図を選んで矢印キーで回転）、右上：xy 平面、左下：xz 平面、右下：yz 平面への投影。
+            原点は重心で、天体が離れると表示の範囲を広げる。天体の色と番号は、初期値の表の天体に対応する。円の大きさは質量に応じる。
             <ul class="legend">
-              <li><span class="swatch s1"></span>天体 1</li>
-              <li><span class="swatch s2"></span>天体 2</li>
-              <li><span class="swatch s3"></span>天体 3</li>
               <li data-chaos-legend hidden><span class="swatch dashed sm"></span>破線：初期値をずらした計算</li>
             </ul>
           </figcaption>
@@ -115,7 +115,7 @@ const description = "3 つの天体が重力で引き合う三体問題を、Rus
           <div><dt>計算の回数</dt><dd data-out="steps">—</dd></div>
           <div><dt>いまの刻み幅 h</dt><dd data-out="dt">—</dd></div>
           <div><dt>全エネルギーの相対誤差</dt><dd data-out="energy">—</dd></div>
-          <div><dt>全角運動量のずれ</dt><dd data-out="angular">—</dd></div>
+          <div><dt>全角運動量のずれ |ΔL|</dt><dd data-out="angular">—</dd></div>
           <div><dt>2 つの計算の位置のずれ</dt><dd data-out="separation">—</dd></div>
         </dl>
         <p class="note" data-error hidden>WebAssembly を読み込めませんでした。お使いのブラウザでは動かない可能性があります。</p>
@@ -148,16 +148,16 @@ const description = "3 つの天体が重力で引き合う三体問題を、Rus
         <h2 id="method-heading">3. 方法</h2>
         <h3>運動方程式</h3>
         <p>天体 i の位置を <Fragment set:html={tex(String.raw`\mathbf r_i`)} />、質量を <Fragment set:html={tex("m_i")} /> とすると、運動方程式は</p>
-        <Fragment set:html={tex(String.raw`\ddot{\mathbf r}_i = \sum_{j \neq i} G m_j \, \frac{\mathbf r_j - \mathbf r_i}{\lVert \mathbf r_j - \mathbf r_i \rVert^{3}}, \qquad i = 1, 2, 3`, true)} />
-        <p>です。G = 1 とし、運動は 1 つの平面内（<Fragment set:html={tex(String.raw`\mathbf r_i = (x_i, y_i)`)} />）とします。天体が近づいたときに力を弱める工夫（軟化）は入れていません。</p>
+        <Fragment set:html={tex(String.raw`\ddot{\mathbf r}_i = \sum_{j \neq i} G m_j \, \frac{\mathbf r_j - \mathbf r_i}{\lVert \mathbf r_j - \mathbf r_i \rVert^{3}}, \qquad \mathbf r_i \in \mathbb R^{3},\ i = 1, \dots, N`, true)} />
+        <p>です。天体の数 N は 2〜8 で、G = 1 とします。天体が近づいたときに力を弱める工夫（軟化）は入れていません。</p>
         <h3>保存量と誤差の定義</h3>
-        <p>全エネルギーと全角運動量（平面に垂直な成分）は、厳密には時間によらず一定です。</p>
-        <Fragment set:html={tex(String.raw`E = \sum_{i} \frac{1}{2} m_i \lVert \dot{\mathbf r}_i \rVert^{2} - \sum_{i < j} \frac{G m_i m_j}{\lVert \mathbf r_j - \mathbf r_i \rVert}, \qquad L_z = \sum_i m_i \left( x_i \dot y_i - y_i \dot x_i \right)`, true)} />
+        <p>全エネルギーと全角運動量（ベクトル）は、厳密には時間によらず一定です。</p>
+        <Fragment set:html={tex(String.raw`E = \sum_{i} \frac{1}{2} m_i \lVert \dot{\mathbf r}_i \rVert^{2} - \sum_{i < j} \frac{G m_i m_j}{\lVert \mathbf r_j - \mathbf r_i \rVert}, \qquad \mathbf L = \sum_i m_i \, \mathbf r_i \times \dot{\mathbf r}_i`, true)} />
         <p>図 2 の縦軸は、全エネルギーの相対誤差</p>
         <Fragment set:html={tex(String.raw`\varepsilon_E(t) = \left| \frac{E(t) - E(0)}{E(0)} \right|`, true)} />
         <p>です。</p>
         <h3>積分法</h3>
-        <p>状態を <Fragment set:html={tex(String.raw`y = (\mathbf r_1, \mathbf r_2, \mathbf r_3, \dot{\mathbf r}_1, \dot{\mathbf r}_2, \dot{\mathbf r}_3)`)} />、運動方程式を <Fragment set:html={tex(String.raw`\dot y = f(y)`)} />、刻み幅を <Fragment set:html={tex("h")} /> とします。</p>
+        <p>状態を <Fragment set:html={tex(String.raw`y = (\mathbf r_1, \dots, \mathbf r_N, \dot{\mathbf r}_1, \dots, \dot{\mathbf r}_N)`)} />、運動方程式を <Fragment set:html={tex(String.raw`\dot y = f(y)`)} />、刻み幅を <Fragment set:html={tex("h")} /> とします。</p>
         <p><strong>古典的ルンゲ・クッタ法（RK4、4 次）</strong></p>
         <Fragment set:html={tex(String.raw`\begin{aligned} k_1 &= f(y_n), \\ k_2 &= f\!\left(y_n + \tfrac{h}{2} k_1\right), \\ k_3 &= f\!\left(y_n + \tfrac{h}{2} k_2\right), \\ k_4 &= f(y_n + h\, k_3), \\ y_{n+1} &= y_n + \tfrac{h}{6}\left(k_1 + 2k_2 + 2k_3 + k_4\right) \end{aligned}`, true)} />
         <p><strong>ドルマン・プリンス法（RK45、5(4) 次）</strong>　7 段の計算から 5 次と 4 次の解 <Fragment set:html={tex(String.raw`y^{(5)}_{n+1}, y^{(4)}_{n+1}`)} /> を作り、その差で誤差を見積もって刻み幅を決めます。</p>
@@ -170,6 +170,8 @@ const description = "3 つの天体が重力で引き合う三体問題を、Rus
         <ul>
           <li><strong>8 の字の解</strong>：同じ質量の 3 天体が、1 本の 8 の字の上を追いかけ合う周期解（周期 約 6.326）。初期値は広く使われている数値を用いた。</li>
           <li><strong>ピタゴラスの三体問題</strong>：質量 3・4・5 の天体を、辺の長さ 3・4・5 の直角三角形の頂点に静止させて始める。時刻 70 ごろ、最も軽い天体が弾き飛ばされ、残りの 2 つが連星になる。</li>
+          <li><strong>8 の字の解＋垂直の速度</strong>：8 の字の解の天体 1 に、平面に垂直な速度 v<sub>z</sub> = 0.1 を足したもの（全運動量が 0 になるよう、ほかの 2 天体に逆向きに分ける）。8 の字が少しずつ傾きを変えながら回る、3 次元の動きになる。</li>
+          <li><strong>傾いた連星＋第 3 天体</strong>：質量 1・1 の連星（間隔 1、xy 平面の円軌道）の周りを、質量 0.1 の天体が半径 5 の円軌道で、xy 平面から 30° 傾いて回る（階層的な三体）。</li>
         </ul>
       </section>
 
@@ -184,6 +186,9 @@ const description = "3 つの天体が重力で引き合う三体問題を、Rus
             <tr><td>全運動量が保たれる。リープフロッグ法では全角運動量も保たれる</td><td>ずれが 10⁻⁹（角運動量は 10⁻¹⁰）未満</td></tr>
             <tr><td>リープフロッグ法のエネルギーの誤差が、100 周期でも増え続けない</td><td>10 周期の最大値と同程度</td></tr>
             <tr><td>ピタゴラスの三体問題で、最も軽い天体が弾き飛ばされ、残りが連星になる</td><td>Szebehely と Peters（1967）の結果と一致</td></tr>
+            <tr><td>8 の字の解を空間の中で傾けても、1 周期後に初期状態に戻る（3 次元の計算が向きに依らない）</td><td>位置の差が 10⁻⁶ 未満</td></tr>
+            <tr><td>5 体の 3 次元の運動で、全運動量と全角運動量（ベクトル）が保たれる（リープフロッグ法）</td><td>ずれが 10⁻⁹（角運動量は 10⁻¹⁰）未満</td></tr>
+            <tr><td>入力の検証：天体は 2〜8 個、質量は正、位置と速度は有限、天体は重ならない</td><td>誤った入力を受け付けない</td></tr>
           </tbody>
         </table>
       </section>

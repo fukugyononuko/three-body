@@ -1,6 +1,6 @@
 //! 積分法（docs/plan.md §3：N-02〜N-04）。
 
-use crate::{State, Vec2};
+use crate::{State, Vec3};
 
 /// 積分法の種類
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,13 +79,13 @@ impl Integrator {
     }
 
     /// 状態をまとめた 1 本の列（位置、速度）の時間微分
-    fn derivative(&self, pos: &[Vec2], vel: &[Vec2]) -> (Vec<Vec2>, Vec<Vec2>) {
+    fn derivative(&self, pos: &[Vec3], vel: &[Vec3]) -> (Vec<Vec3>, Vec<Vec3>) {
         (vel.to_vec(), self.state.accelerations(pos))
     }
 
     fn rk4_step(&mut self, h: f64) {
         let (p0, v0) = (self.state.positions.clone(), self.state.velocities.clone());
-        let shift = |base: &[Vec2], d: &[Vec2], k: f64| -> Vec<Vec2> {
+        let shift = |base: &[Vec3], d: &[Vec3], k: f64| -> Vec<Vec3> {
             base.iter().zip(d).map(|(b, d)| *b + *d * k).collect()
         };
         let (k1p, k1v) = self.derivative(&p0, &v0);
@@ -168,8 +168,8 @@ impl Integrator {
         let (p0, v0) = (self.state.positions.clone(), self.state.velocities.clone());
         let mut h = self.dt.min(h_max);
         loop {
-            let mut kp: Vec<Vec<Vec2>> = Vec::with_capacity(7);
-            let mut kv: Vec<Vec<Vec2>> = Vec::with_capacity(7);
+            let mut kp: Vec<Vec<Vec3>> = Vec::with_capacity(7);
+            let mut kv: Vec<Vec<Vec3>> = Vec::with_capacity(7);
             let (p, v) = self.derivative(&p0, &v0);
             kp.push(p);
             kv.push(v);
@@ -186,7 +186,7 @@ impl Integrator {
                 kp.push(p);
                 kv.push(v);
             }
-            let combine = |base: &[Vec2], k: &[Vec<Vec2>], b: &[f64; 7]| -> Vec<Vec2> {
+            let combine = |base: &[Vec3], k: &[Vec<Vec3>], b: &[f64; 7]| -> Vec<Vec3> {
                 (0..n)
                     .map(|i| (0..7).fold(base[i], |acc, s| acc + k[s][i] * (h * b[s])))
                     .collect()
@@ -203,6 +203,8 @@ impl Integrator {
                     (p5[i].y, p4[i].y, p0[i].y),
                     (v5[i].x, v4[i].x, v0[i].x),
                     (v5[i].y, v4[i].y, v0[i].y),
+                    (p5[i].z, p4[i].z, p0[i].z),
+                    (v5[i].z, v4[i].z, v0[i].z),
                 ] {
                     let scale = self.tolerance * (1.0 + base.abs().max(a.abs()));
                     sum += ((a - b) / scale).powi(2);

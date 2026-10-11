@@ -223,3 +223,69 @@ footer img {
 .swatch.sm {
   border-color: var(--muted);
 }
+/* 数式（MathML）。Temml の style 属性の代わり（src/lib/tex.ts） */
+.tml-sty-block {
+  display: block math;
+}
+.tml-sty-depth0 {
+  math-depth: 0;
+}
+.math-scroll {
+  margin: 0.75rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+/* hidden 属性を、display の指定より優先する（入力欄の切り替えに使う） */
+[hidden] {
+  display: none !important;
+}
+math {
+  font-size: 1.05em;
+}
+/* 初期値の表 */
+.initial input {
+  width: 100%;
+  min-width: 4.5rem;
+  font-variant-numeric: tabular-nums;
+}
+.initial th,
+.initial td {
+  padding: 0.25rem;
+}
+.table-scroll {
+  overflow-x: auto;
+}
+fieldset {
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--rule);
+}
+legend {
+  padding: 0 0.25rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+[data-message] {
+  min-height: 1.5rem;
+  color: var(--text);
+  font-size: 0.875rem;
+}
+.check {
+  display: flex !important;
+  align-items: center;
+  gap: 0.4rem;
+}
+.tml-sty-pad00 {
+  padding-left: 0;
+  padding-right: 0;
+}
+.tml-sty-pad10 {
+  padding-left: 1em;
+  padding-right: 0;
+}
+.tml-sty-negthin {
+  margin-left: -0.1667em;
+}
+.initial tbody th {
+  white-space: nowrap;
+}

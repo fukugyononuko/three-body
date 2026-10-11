@@ -1,5 +1,5 @@
-// Q-05 性能の予算：WebAssembly は 100KB まで、1 ページが読み込む CSS（外部ファイル＋インライン）は 20KB まで。
-import { readFileSync, statSync } from "node:fs";
+// Q-05 性能の予算：WebAssembly は 100KB まで、1 ページが読み込む CSS（外部ファイル＋インライン）は 20KB まで、数式のフォントは 60KB まで。
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const DIST = "dist";
@@ -11,8 +11,11 @@ let css = 0;
 for (const m of html.matchAll(/<link rel="stylesheet" href="\/three-body\/([^"]+)"/g)) css += statSync(join(DIST, m[1])).size;
 for (const m of html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)) css += Buffer.byteLength(m[1]);
 if (css > 20 * 1024) problems.push(`CSS ${(css / 1024).toFixed(1)} KB（上限 20 KB）`);
+const mathFont = readdirSync(join(DIST, "_astro")).find((f) => f.startsWith("stix-two-math") && f.endsWith(".woff2"));
+const mathBytes = mathFont ? statSync(join(DIST, "_astro", mathFont)).size : 0;
+if (mathBytes > 60 * 1024) problems.push(`数式のフォント ${(mathBytes / 1024).toFixed(1)} KB（上限 60 KB。サブセット化されていない可能性）`);
 if (problems.length > 0) {
   for (const p of problems) console.error(p);
   process.exit(1);
 }
-console.log(`check-asset-budget: 問題はありません（WebAssembly ${(wasm / 1024).toFixed(1)} KB、CSS ${(css / 1024).toFixed(1)} KB）`);
+console.log(`check-asset-budget: 問題はありません（WebAssembly ${(wasm / 1024).toFixed(1)} KB、CSS ${(css / 1024).toFixed(1)} KB、数式のフォント ${(mathBytes / 1024).toFixed(1)} KB）`);

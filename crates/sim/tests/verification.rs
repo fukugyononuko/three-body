@@ -189,3 +189,41 @@ fn advance_to_terminates_for_many_small_calls() {
         assert!((it.time - t).abs() < 1e-9);
     }
 }
+
+/// S-05 入力の検証：質量は正、位置と速度は有限、天体は重ならない
+#[test]
+fn s05_invalid_initial_conditions_are_rejected() {
+    use sim::StateError;
+    assert_eq!(figure_eight().validate(), Ok(()));
+    assert_eq!(pythagorean().validate(), Ok(()));
+    let mut s = figure_eight();
+    s.masses[1] = 0.0;
+    assert_eq!(s.validate(), Err(StateError::Mass));
+    let mut s = figure_eight();
+    s.masses[2] = -1.0;
+    assert_eq!(s.validate(), Err(StateError::Mass));
+    let mut s = figure_eight();
+    s.velocities[0].x = f64::NAN;
+    assert_eq!(s.validate(), Err(StateError::NotFinite));
+    let mut s = figure_eight();
+    s.positions[1] = s.positions[0];
+    assert_eq!(s.validate(), Err(StateError::Overlap));
+}
+
+/// N-06 刻み幅を細かくすると、RK4 の誤差は小さくなる（4 次なので、刻み幅を 1/2 にすると誤差はおよそ 1/16）
+#[test]
+fn n06_smaller_step_reduces_rk4_error() {
+    let start = figure_eight();
+    let e0 = start.energy();
+    let error = |dt: f64| {
+        let mut it = Integrator::new(start.clone(), Method::Rk4, dt);
+        it.advance_to(FIGURE_EIGHT_PERIOD);
+        ((it.state.energy() - e0) / e0).abs()
+    };
+    let (coarse, fine) = (error(0.02), error(0.01));
+    // 理屈では 1/16。丸め誤差などを見込んで 1/8 より小さくなることを確かめる
+    assert!(
+        fine < coarse / 8.0,
+        "dt=0.02: {coarse:e}, dt=0.01: {fine:e}"
+    );
+}

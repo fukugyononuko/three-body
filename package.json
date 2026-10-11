@@ -9,7 +9,7 @@
   "scripts": {
     "build:wasm": "cargo build --release -p sim --target wasm32-unknown-unknown && mkdir -p public && cp target/wasm32-unknown-unknown/release/sim.wasm public/sim.wasm",
     "dev": "npm run build:wasm && astro dev",
-    "build": "npm run build:wasm && astro build",
+    "build": "npm run build:wasm && astro build && node scripts/subset-math-font.mjs",
     "preview": "astro preview",
     "lint": "astro check",
     "test:e2e": "playwright test",
@@ -20,6 +20,7 @@
     "check:budget": "node scripts/check-asset-budget.mjs"
   },
   "dependencies": {
+    "@fontsource/stix-two-math": "^5.3.0",
     "astro": "^7.3.8"
   },
   "devDependencies": {
@@ -27,6 +28,8 @@
     "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.64.0",
     "lighthouse": "^13.5.0",
+    "subset-font": "^2.9.0",
+    "temml": "^0.14.0",
     "typescript": "^6.0.3"
   },
   "allowScripts": {

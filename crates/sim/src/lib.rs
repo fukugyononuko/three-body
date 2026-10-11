@@ -44,6 +44,19 @@ impl std::ops::Mul<f64> for Vec2 {
     }
 }
 
+/// 入力の誤り（S-05）
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StateError {
+    /// 天体の数と配列の長さが合わない
+    Shape,
+    /// 質量が正の有限の数でない
+    Mass,
+    /// 位置や速度に、有限でない数がある
+    NotFinite,
+    /// 2 つの天体が同じ位置にある
+    Overlap,
+}
+
 /// 天体の集まりの状態（位置と速度）
 #[derive(Clone, Debug, PartialEq)]
 pub struct State {
@@ -111,6 +124,29 @@ impl State {
                         - self.positions[i].y * self.velocities[i].x)
             })
             .sum()
+    }
+
+    /// 入力の検証（S-05）：質量は正の有限の数、位置と速度は有限の数、どの 2 天体も同じ位置にない
+    pub fn validate(&self) -> Result<(), StateError> {
+        let n = self.len();
+        if n < 2 || self.positions.len() != n || self.velocities.len() != n {
+            return Err(StateError::Shape);
+        }
+        if self.masses.iter().any(|m| !(m.is_finite() && *m > 0.0)) {
+            return Err(StateError::Mass);
+        }
+        let finite = |v: &Vec2| v.x.is_finite() && v.y.is_finite();
+        if !self.positions.iter().all(finite) || !self.velocities.iter().all(finite) {
+            return Err(StateError::NotFinite);
+        }
+        for i in 0..n {
+            for j in (i + 1)..n {
+                if (self.positions[j] - self.positions[i]).norm() < 1e-9 {
+                    return Err(StateError::Overlap);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// 重心

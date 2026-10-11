@@ -1,0 +1,31 @@
+# 三体問題シミュレーター
+
+3 つの天体が重力で引き合う三体問題を、Rust で数値計算し、WebAssembly にしてブラウザで動かします。
+
+- 公開ページ：https://fukugyononuko.github.io/three-body/
+- 制作計画書（シナリオ・数値計算・構成・検証・トレーサビリティ）：[docs/plan.md](docs/plan.md)
+- 制作：[副業のぬこ](https://fukugyononuko.github.io/)
+
+## 構成
+
+| 場所 | 内容 |
+| --- | --- |
+| `crates/sim/` | 数値計算（Rust、外部クレートなし）。積分法（RK4、RK45、リープフロッグ法）、シナリオ、保存量、WebAssembly の窓口 |
+| `crates/sim/tests/` | 検証（二体の円軌道、8 の字の解の周期、保存量、エネルギーの誤差、ピタゴラスの三体問題の結末） |
+| `src/` | Web ページ（Astro + TypeScript）。キャンバスへの描画と操作 |
+| `tests/e2e/` | ブラウザでの検証（WebAssembly の動作、CSP、アクセシビリティ） |
+
+## 開発
+
+Rust（`rust-toolchain.toml` で版を固定）と Node.js 24 を使います。
+
+```sh
+cargo test --release           # 数値計算の検証
+npm ci
+npm run dev                    # WebAssembly をビルドして http://localhost:4321/three-body/
+npm run build && npm run test:e2e && npm run test:lighthouse
+```
+
+## ライセンス
+
+MIT License

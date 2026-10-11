@@ -1,0 +1,225 @@
+/* 論文のような、飾りの少ない見た目（B 案：白い紙の図）。ダークモードにも対応する */
+:root {
+  --bg: #ffffff;
+  --paper: #ffffff;
+  --text: #1b1b1b;
+  --muted: #555450;
+  --rule: #d9d8d2;
+  --grid: #ecebe6;
+  --link: #1f4f8f;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --font-body: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  --font-heading: "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", "Noto Serif CJK JP", serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161615;
+    --paper: #1a1a19;
+    --text: #ecebe6;
+    --muted: #b4b2aa;
+    --rule: #3a3a37;
+    --grid: #2c2c2a;
+    --link: #8fb7ea;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    color-scheme: dark;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+main,
+header,
+footer {
+  max-width: 48rem;
+  margin-inline: auto;
+  padding-inline: 1rem;
+}
+h1,
+h2,
+h3 {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  line-height: 1.5;
+  word-break: auto-phrase;
+}
+h1 {
+  margin: 2.5rem 0 0.25rem;
+  font-size: clamp(1.6rem, 5vw, 2.1rem);
+}
+h2 {
+  margin: 2.5rem 0 0.75rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--rule);
+  font-size: 1.3rem;
+}
+p {
+  word-break: auto-phrase;
+}
+a {
+  color: var(--link);
+}
+:focus-visible {
+  outline: 3px solid var(--link);
+  outline-offset: 2px;
+}
+.byline {
+  margin: 0 0 1.5rem;
+  color: var(--muted);
+}
+.abstract {
+  margin: 0 0 1rem;
+  padding: 1rem 1.25rem;
+  border-left: 3px solid var(--rule);
+  background: var(--paper);
+}
+.abstract strong {
+  font-family: var(--font-heading);
+}
+figure {
+  margin: 1.5rem 0;
+}
+figcaption {
+  margin-top: 0.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+}
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
+  align-items: end;
+  margin: 0.75rem 0;
+}
+.controls label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+select,
+input,
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.3rem 0.6rem;
+}
+button {
+  cursor: pointer;
+}
+button[aria-pressed="true"] {
+  border-color: var(--link);
+}
+.readout {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.25rem 1rem;
+  margin: 0;
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+}
+.readout dt {
+  color: var(--muted);
+}
+.readout dd {
+  margin: 0;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.875rem;
+}
+.swatch {
+  display: inline-block;
+  width: 1.5rem;
+  height: 0;
+  margin-right: 0.4rem;
+  border-top: 3px solid;
+  vertical-align: middle;
+}
+.swatch.dashed {
+  border-top-style: dashed;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+th,
+td {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--rule);
+  text-align: left;
+  vertical-align: top;
+}
+.refs li {
+  margin-bottom: 0.5rem;
+}
+footer {
+  margin-top: 3rem;
+  padding-block: 1.5rem 2.5rem;
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+footer img {
+  display: inline-block;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  vertical-align: middle;
+  margin-right: 0.4rem;
+}
+.skip {
+  position: absolute;
+  left: 1rem;
+  top: -3rem;
+}
+.skip:focus {
+  top: 0.5rem;
+  background: var(--paper);
+  padding: 0.25rem 0.5rem;
+}
+.note {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+/* 凡例の色見本（CSP によりインラインの style 属性は使えないので、クラスで指定する） */
+.swatch.s1 {
+  border-color: var(--series-1);
+}
+.swatch.s2 {
+  border-color: var(--series-2);
+}
+.swatch.s3 {
+  border-color: var(--series-3);
+}
+.swatch.sm {
+  border-color: var(--muted);
+}

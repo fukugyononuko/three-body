@@ -1,0 +1,35 @@
+{
+  "name": "three-body",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build:wasm": "cargo build --release -p sim --target wasm32-unknown-unknown && mkdir -p public && cp target/wasm32-unknown-unknown/release/sim.wasm public/sim.wasm",
+    "dev": "npm run build:wasm && astro dev",
+    "build": "npm run build:wasm && astro build",
+    "preview": "astro preview",
+    "lint": "astro check",
+    "test:e2e": "playwright test",
+    "test:lighthouse": "node scripts/lighthouse.mjs",
+    "check:workflows": "node scripts/check-workflows.mjs",
+    "check:images": "node scripts/check-image-metadata.mjs",
+    "check:privacy": "node scripts/check-privacy.mjs",
+    "check:budget": "node scripts/check-asset-budget.mjs"
+  },
+  "dependencies": {
+    "astro": "^7.3.8"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.10",
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.64.0",
+    "lighthouse": "^13.5.0",
+    "typescript": "^6.0.3"
+  },
+  "allowScripts": {
+    "fsevents": false
+  }
+}

@@ -190,3 +190,41 @@ test("3 次元：立体図をドラッグと矢印キーで回せる", async ({ 
   await page.click("#view-reset");
   expect(await snapshot()).toBe(before);
 });
+
+test("軌跡の長さ：0 から ∞ まで選べ、短くすると描かれる線が減る", async ({ page }) => {
+  await ready(page);
+  await expect(page.locator("#trail option")).toHaveCount(8);
+  await page.selectOption("#speed", "3");
+  await page.selectOption("#trail", "Infinity");
+  await page.click("#apply");
+  await expect.poll(() => num(page, "time"), { timeout: 8000 }).toBeGreaterThan(5);
+  // 天体 3 の色（緑）の系統の画素だけを数える。8 の字の解では 3 天体が同じ道を通り、最後に描く天体 3 の線が一番上に来るため
+  // （座標軸や文字は灰色なので数えない。線の縁が背景と混ざっても緑みは残る）
+  const colored = () =>
+    page.locator("#orbits").evaluate((c: HTMLCanvasElement) => {
+      const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+      let count = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i + 1] - d[i] > 50 && d[i + 1] - d[i + 2] > 15) count++;
+      return count;
+    });
+  await page.click("#play"); // 一時停止
+  const all = await colored();
+  await page.selectOption("#trail", "0");
+  await page.click("#play"); // 再生して、短い軌跡に切り替わるのを待つ
+  await page.waitForTimeout(500);
+  await page.click("#play");
+  const none = await colored();
+  expect(none).toBeLessThan(all / 3);
+});
+
+test("フォント：本文は Computer Modern Roman（＋明朝体）、節タイトルは Computer Modern Sans（＋ゴシック体）", async ({ page }) => {
+  await ready(page);
+  const family = (selector: string) => page.locator(selector).first().evaluate((el) => getComputedStyle(el).fontFamily);
+  expect(await family("h2")).toMatch(/^"CMU Sans Serif"/);
+  expect(await family("h2")).toContain("Gothic");
+  expect(await family("main p")).toMatch(/^"CMU Serif"/);
+  expect(await family("main p")).toContain("Mincho");
+  await page.evaluate(() => document.fonts.ready);
+  const loaded = await page.evaluate(() => [...document.fonts].filter((f) => f.status === "loaded").map((f) => f.family.replaceAll('"', "")));
+  expect(loaded).toEqual(expect.arrayContaining(["CMU Serif", "CMU Sans Serif"]));
+});

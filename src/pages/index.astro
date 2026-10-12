@@ -2,7 +2,11 @@
 // 三体問題シミュレーター（docs/plan.md）。論文のような 1 ページの構成にする
 import "../styles/paper.css";
 import "../styles/math-font.css";
+import "../styles/tex-font.css";
 import { tex } from "../lib/tex";
+// 最初の画面で使う欧文フォント（本文と見出し）を早めに読み込む（ビルド後にサブセット化されたファイルが同じ URL で配信される）
+import cmuSerifUrl from "../../node_modules/computer-modern/fonts/cmu-serif-500-roman.woff2?url";
+import cmuSansBoldUrl from "../../node_modules/computer-modern/fonts/cmu-sans-serif-700-roman.woff2?url";
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 const title = "三体問題シミュレーター";
 const description = "天体が重力で引き合う三体問題（N 体問題）を、Rust で数値計算し、WebAssembly でブラウザ上に 3 次元で描きます。天体の数・初期値・積分法・刻み幅を選べ、全エネルギーの誤差やカオスも確かめられます。";
@@ -15,6 +19,8 @@ const description = "天体が重力で引き合う三体問題（N 体問題）
     <title>{title}</title>
     <meta name="description" content={description} />
     <link rel="canonical" href="https://fukugyononuko.github.io/three-body/" />
+    <link rel="preload" href={cmuSerifUrl} as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href={cmuSansBoldUrl} as="font" type="font/woff2" crossorigin />
     <link rel="icon" href={`${base}/favicon.svg`} type="image/svg+xml" />
   </head>
   <body>
@@ -59,6 +65,18 @@ const description = "天体が重力で引き合う三体問題（N 体問題）
           </label>
           <label data-field="tolerance">許容誤差（RK45）
             <input id="tolerance" type="number" inputmode="decimal" min="0" step="any" value="1e-10" />
+          </label>
+          <label>軌跡の長さ
+            <select id="trail">
+              <option value="0">0（点だけ）</option>
+              <option value="0.5">0.5 単位時間</option>
+              <option value="1">1 単位時間</option>
+              <option value="2" selected>2 単位時間</option>
+              <option value="5">5 単位時間</option>
+              <option value="10">10 単位時間</option>
+              <option value="20">20 単位時間</option>
+              <option value="Infinity">∞（すべて残す）</option>
+            </select>
           </label>
           <label>再生の速さ
             <select id="speed">
@@ -105,6 +123,7 @@ const description = "天体が重力で引き合う三体問題（N 体問題）
           <figcaption>
             図 1　天体の軌道の 4 面図。左上：立体図（ドラッグか、図を選んで矢印キーで回転）、右上：xy 平面、左下：xz 平面、右下：yz 平面への投影。
             原点は重心で、天体が離れると表示の範囲を広げる。天体の色と番号は、初期値の表の天体に対応する。円の大きさは質量に応じる。
+            軌跡は「軌跡の長さ」で選んだ時間だけ残し、古い部分ほど薄く描く（「すべて残す」では、天体 1 つあたり最新の 20,000 点まで）。
             <ul class="legend">
               <li data-chaos-legend hidden><span class="swatch dashed sm"></span>破線：初期値をずらした計算</li>
             </ul>

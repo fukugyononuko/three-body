@@ -18,9 +18,14 @@ interface SimExports {
 }
 
 type V3 = [number, number, number];
+/** 軌跡の点：重心を引いた位置と、その時刻 */
+type TrailPoint = [number, number, number, number];
 const FIELDS = ["m", "x", "y", "z", "vx", "vy", "vz"] as const;
 const FIELD_LABELS: Record<(typeof FIELDS)[number], string> = { m: "質量", x: "位置 x", y: "位置 y", z: "位置 z", vx: "速度 vx", vy: "速度 vy", vz: "速度 vz" };
-const TRAIL = 3000;
+/** 軌跡を「すべて残す」ときの、天体 1 つあたりの点の上限（描画の速さのため） */
+const TRAIL_MAX_POINTS = 20000;
+/** 古い軌跡を薄くするときの段階の数 */
+const FADE_BANDS = 8;
 const MAIN = 0;
 const CHAOS = 1;
 const COMPARE = [2, 3, 4];
@@ -42,6 +47,7 @@ const methodSelect = $<HTMLSelectElement>("#method");
 const dtInput = $<HTMLInputElement>("#dt");
 const tolInput = $<HTMLInputElement>("#tolerance");
 const speedSelect = $<HTMLSelectElement>("#speed");
+const trailSelect = $<HTMLSelectElement>("#trail");
 const chaosToggle = $<HTMLInputElement>("#chaos");
 const chaosBody = $<HTMLSelectElement>("#chaos-body");
 const chaosDelta = (axis: "x" | "y" | "z") => $<HTMLInputElement>(`#chaos-d${axis}`);
@@ -67,8 +73,8 @@ let simTime = 0;
 let lastFrame = 0;
 let lastSample = -Infinity;
 let slots: number[] = [MAIN];
-/** 軌跡：計算（スロット）→ 天体 → 点の列（重心を引いた座標） */
-let trails: V3[][][] = [];
+/** 軌跡：計算（スロット）→ 天体 → 点の列 */
+let trails: TrailPoint[][][] = [];
 let e0: number[] = [];
 let l0: V3[] = [];
 let masses: number[] = [];
@@ -198,7 +204,7 @@ function apply(): void {
   }
   simTime = 0;
   lastSample = -Infinity;
-  trails = slots.map((s) => relativePositions(s).map((p) => [p]));
+  trails = slots.map((s) => relativePositions(s).map((p): TrailPoint[] => [[...p, 0]]));
   view.half = 0;
   fitView();
   energySeries = slots.map((_, k) => ({
@@ -218,8 +224,8 @@ function apply(): void {
 function fitView(): void {
   let need = view.half;
   for (const trail of trails) for (const body of trail) {
-    const p = body[body.length - 1];
-    need = Math.max(need, ...p.map((v) => Math.abs(v) * 1.15));
+    const [x, y, z] = body[body.length - 1];
+    need = Math.max(need, Math.abs(x) * 1.15, Math.abs(y) * 1.15, Math.abs(z) * 1.15);
   }
   view.half = Math.max(need, 0.5);
 }
@@ -284,35 +290,57 @@ function drawOrbits(): void {
       g.font = `18px ${css("--font-body")}`;
       g.fillText(name, ex + 4, ey - 4);
     }
+    // 1. 軌跡（全天体の線を先に描き、点がその上に来るようにする）。古い部分ほど薄く描く（「すべて残す」のときは薄くしない）
+    const trailLength = Number(trailSelect.value);
+    const fade = Number.isFinite(trailLength) && trailLength > 0;
+    slots.forEach((_, s) => {
+      g.setLineDash(s === 1 ? [6, 5] : []);
+      g.lineWidth = s === 1 ? 1.2 : 1.6;
+      for (let i = 0; i < bodies; i++) {
+        const points = trails[s][i];
+        if (points.length < 2) continue;
+        g.strokeStyle = colorOf(i);
+        const bands = fade ? FADE_BANDS : 1;
+        const per = Math.ceil((points.length - 1) / bands);
+        for (let band = 0; band < bands; band++) {
+          const from = band * per;
+          const to = Math.min(points.length - 1, from + per);
+          if (to <= from) continue;
+          g.globalAlpha = fade ? 0.15 + (0.85 * (band + 1)) / bands : 1;
+          g.beginPath();
+          for (let k = from; k <= to; k++) {
+            const [sx, sy] = toScreen(points[k] as unknown as V3);
+            if (k === from) g.moveTo(sx, sy);
+            else g.lineTo(sx, sy);
+          }
+          g.stroke();
+        }
+      }
+    });
+    g.globalAlpha = 1;
+    g.setLineDash([]);
+    // 2. 天体の現在の位置（すべての線の上に描く）
     slots.forEach((_, s) => {
       for (let i = 0; i < bodies; i++) {
-        g.setLineDash(s === 1 ? [6, 5] : []);
-        g.strokeStyle = colorOf(i);
-        g.lineWidth = s === 1 ? 1.2 : 1.6;
-        g.beginPath();
-        trails[s][i].forEach((p, k) => {
-          const [sx, sy] = toScreen(p);
-          if (k === 0) g.moveTo(sx, sy);
-          else g.lineTo(sx, sy);
-        });
-        g.stroke();
-        g.setLineDash([]);
         const [sx, sy] = toScreen(current[s][i]);
         g.fillStyle = colorOf(i);
         g.strokeStyle = css("--paper");
         g.lineWidth = 2;
+        g.globalAlpha = s === 1 ? 0.6 : 1;
         g.beginPath();
         g.arc(sx, sy, 3 + 4 * Math.cbrt(masses[i] / Math.max(...masses)), 0, 2 * Math.PI);
         g.fill();
         g.stroke();
-        if (s === 0) {
-          // 番号を添える（色だけに頼らない）
-          g.fillStyle = css("--text");
-          g.font = `16px ${css("--font-body")}`;
-          g.fillText(String(i + 1), sx + 8, sy - 6);
-        }
       }
     });
+    g.globalAlpha = 1;
+    // 3. 番号（色だけに頼らない）
+    g.fillStyle = css("--text");
+    g.font = `16px ${css("--font-body")}`;
+    for (let i = 0; i < bodies; i++) {
+      const [sx, sy] = toScreen(current[0][i]);
+      g.fillText(String(i + 1), sx + 8, sy - 6);
+    }
     g.restore();
     g.fillStyle = css("--text");
     g.font = `20px ${css("--font-body")}`;
@@ -358,9 +386,15 @@ function frame(now: number): void {
   simTime += elapsed * Number(speedSelect.value);
   slots.forEach((slot, s) => {
     wasm.sim_advance(slot, simTime);
+    const trailLength = Number(trailSelect.value);
     relativePositions(slot).forEach((p, i) => {
-      trails[s][i].push(p);
-      if (trails[s][i].length > TRAIL) trails[s][i].shift();
+      const points = trails[s][i];
+      points.push([...p, simTime]);
+      // 選んだ長さ（時間）より古い点を捨てる。「すべて残す」でも点の数には上限を設ける
+      let drop = 0;
+      while (drop < points.length - 1 && simTime - points[drop][3] > trailLength) drop++;
+      if (points.length - drop > TRAIL_MAX_POINTS) drop = points.length - TRAIL_MAX_POINTS;
+      if (drop > 0) points.splice(0, drop);
     });
   });
   if (simTime - lastSample > 0.02) {
@@ -570,6 +604,7 @@ async function main(): Promise<void> {
   playButton.addEventListener("click", () => setPlaying(!playing));
   compareButton.addEventListener("click", compare);
   setupViewControls();
+  trailSelect.addEventListener("change", () => drawOrbits());
   syncMethodFields();
   loadPreset();
   root.dataset.ready = "true";

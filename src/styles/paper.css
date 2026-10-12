@@ -15,8 +15,10 @@
   --series-6: #008300;
   --series-7: #6250d6;
   --series-8: #e34948;
-  --font-body: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
-  --font-heading: "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", "Noto Serif CJK JP", serif;
+  /* jsarticle に合わせる：本文は Computer Modern Roman＋明朝体、見出しと太字は Computer Modern Sans（太字）＋ゴシック体 */
+  --font-body: "CMU Serif", "Hiragino Mincho ProN", "Yu Mincho", "YuMincho", "Noto Serif JP", "Noto Serif CJK JP", serif;
+  --font-heading: "CMU Sans Serif", "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic", "YuGothic", "Noto Sans JP", sans-serif;
+  --font-bold: "CMU Serif", "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic", "YuGothic", "Noto Sans JP", sans-serif;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -61,7 +63,7 @@ h1,
 h2,
 h3 {
   font-family: var(--font-heading);
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1.5;
   word-break: auto-phrase;
 }
@@ -94,6 +96,11 @@ a {
   padding: 1rem 1.25rem;
   border-left: 3px solid var(--rule);
   background: var(--paper);
+}
+strong,
+b {
+  font-family: var(--font-bold);
+  font-weight: 700;
 }
 .abstract strong {
   font-family: var(--font-heading);

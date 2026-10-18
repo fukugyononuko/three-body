@@ -42,10 +42,12 @@ test("S-05：プリセットの値が入力欄に入り、書き換えると「�
   await expect(page.locator("#preset")).toHaveValue("-1");
 });
 
-test("S-08〜S-15：どのプリセットも読み込めて、誤りなく計算が進む", async ({ page }) => {
+test("S-08〜S-16：どのプリセットも読み込めて、誤りなく計算が進む", async ({ page }) => {
   await ready(page);
   const values = await page.locator("#preset option").evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
-  expect(values.filter((v) => v !== "-1")).toEqual(Array.from({ length: 18 }, (_, i) => String(i)));
+  // 選択肢は分類ごとに並ぶので、番号の順とは限らない
+  const ids = values.filter((v) => v !== "-1").map(Number).sort((a, b) => a - b);
+  expect(ids).toEqual(Array.from({ length: 20 }, (_, i) => i));
   for (const value of values.filter((v) => Number(v) >= 4)) {
     await page.selectOption("#preset", value);
     await expect(page.locator("[data-message]")).toHaveText("");
@@ -251,4 +253,56 @@ test("フォント：本文は Computer Modern Roman（＋明朝体）、節タ�
   await page.evaluate(() => document.fonts.ready);
   const loaded = await page.evaluate(() => [...document.fonts].filter((f) => f.status === "loaded").map((f) => f.family.replaceAll('"', "")));
   expect(loaded).toEqual(expect.arrayContaining(["CMU Serif", "CMU Sans Serif"]));
+});
+
+test("回転座標系：L4 のプリセットでは伴星と L4 の天体が止まって見え、静止座標系に切り替えると円を描く", async ({ page }) => {
+  await ready(page);
+  await page.selectOption("#preset", "9");
+  await expect(page.locator("#rotating")).toBeChecked();
+  await expect(page.locator("[data-rotating-fields]")).toBeVisible();
+  await page.selectOption("#speed", "10");
+  await page.selectOption("#trail", "Infinity");
+  await page.click("#apply");
+  // 静止座標系では、伴星と L4 の天体が 2 周近く回って同じ円を描く
+  await expect.poll(() => num(page, "time"), { timeout: 8000 }).toBeGreaterThan(12);
+  await page.click("#play"); // 一時停止
+  // 色のついた画素（天体と軌跡）を数える。座標軸・文字・ラグランジュ点の印は灰色なので数えない。
+  // 伴星と L4 の天体は同じ円を回り、後から描く L4 の天体の線が伴星の線を覆うので、色を分けずに数える
+  const colored = () =>
+    page.locator("#orbits").evaluate((c: HTMLCanvasElement) => {
+      const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+      let count = 0;
+      for (let i = 0; i < d.length; i += 4) if (Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]) > 60) count++;
+      return count;
+    });
+  const rotating = await colored();
+  await page.uncheck("#rotating");
+  await expect(page.locator("[data-rotating-fields]")).toBeHidden();
+  const inertial = await colored();
+  await page.check("#rotating");
+  const again = await colored();
+  expect(rotating).toBeGreaterThan(0);
+  expect(inertial).toBeGreaterThan(5 * rotating);
+  expect(again).toBe(rotating); // 切り替えても軌跡は消えない
+  await expect(page.locator("[data-message]")).toHaveText("");
+});
+
+test("回転座標系：プリセットごとに座標系・再生の速さ・軌跡の長さが決まり、主星と伴星に同じ天体を選ぶと入れ替わる", async ({ page }) => {
+  await ready(page);
+  await expect(page.locator("#rotating")).not.toBeChecked();
+  for (const id of ["18", "19"]) {
+    await page.selectOption("#preset", id);
+    await expect(page.locator("#rotating")).toBeChecked();
+    await expect(page.locator("#speed")).toHaveValue("10");
+    await expect(page.locator("#trail")).toHaveValue("Infinity");
+    await expect(page.locator("#primary")).toHaveValue("0");
+    await expect(page.locator("#secondary")).toHaveValue("1");
+    await expect(page.locator("[data-message]")).toHaveText("");
+  }
+  await page.selectOption("#primary", "1");
+  await expect(page.locator("#secondary")).toHaveValue("0");
+  await page.selectOption("#secondary", "2");
+  await expect(page.locator("#primary")).toHaveValue("1");
+  await page.selectOption("#preset", "0");
+  await expect(page.locator("#rotating")).not.toBeChecked();
 });

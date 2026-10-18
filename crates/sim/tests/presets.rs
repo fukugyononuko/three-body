@@ -1,11 +1,13 @@
-//! プリセットの検証（docs/plan.md §6：V-14〜V-21）。研究済みの周期解、ラグランジュの解、惑星、連星への侵入、シトニコフ問題
+//! プリセットの検証（docs/plan.md §6：V-14〜V-21、V-23、V-24）。研究済みの周期解、ラグランジュの解、惑星、連星への侵入、
+//! シトニコフ問題、ラグランジュ点の位置、L4 からずらしたトロヤ群
 
 use sim::integrators::{Integrator, Method};
 use sim::scenarios::{
-    BUTTERFLY_I, DRAGONFLY, JUPITER_MU, JUPITER_SUN_MASS_RATIO, KEPLER16_INNER_A,
-    KEPLER16_PLANET_A, KOZAI_INCLINATION_DEG, MOTH_I, PRESET_COUNT, YIN_YANG_I, binary_exchange,
-    binary_ionization, by_id, euler_collinear, kepler16, kozai_lidov, lagrange_triangle, preset_dt,
-    sitnikov, suvakov, trojan,
+    BUTTERFLY_I, DRAGONFLY, HORSESHOE_ANGLE_DEG, JUPITER_MU, JUPITER_SUN_MASS_RATIO,
+    KEPLER16_INNER_A, KEPLER16_PLANET_A, KOZAI_INCLINATION_DEG, MOTH_I, PRESET_COUNT,
+    TADPOLE_ANGLE_DEG, YIN_YANG_I, binary_exchange, binary_ionization, by_id, euler_collinear,
+    kepler16, kozai_lidov, lagrange_points, lagrange_triangle, preset_dt, sitnikov, suvakov,
+    trojan, trojan_displaced,
 };
 use sim::{State, Vec3};
 
@@ -90,6 +92,8 @@ fn preset_ids_match_scenarios() {
         (15, binary_exchange()),
         (16, binary_ionization()),
         (17, sitnikov()),
+        (18, trojan_displaced(JUPITER_MU, TADPOLE_ANGLE_DEG)),
+        (19, trojan_displaced(JUPITER_MU, HORSESHOE_ANGLE_DEG)),
     ];
     for (id, state) in expected {
         assert_eq!(by_id(id), Some(state), "プリセット {id}");
@@ -496,6 +500,27 @@ fn preset_stated_quantities_hold_in_initial_states() {
         }
     }
 
+    // L4 からずらしたトロヤ群：2 天体の重心の周りに L4 を 20°・115° 回した位置で、回転座標系では静止
+    for (id, angle) in [(18, TADPOLE_ANGLE_DEG), (19, HORSESHOE_ANGLE_DEG)] {
+        let s = by_id(id).unwrap();
+        let l4 = lagrange_points(JUPITER_MU)[3];
+        close(
+            synodic_angle(&s) - l4.y.atan2(l4.x).to_degrees(),
+            angle,
+            "L4 からずらした角度",
+        );
+        let (c, v) = pair_com(&s, 0, 1);
+        let r = s.positions[2] - c;
+        close(r.norm(), l4.norm(), "2 天体の重心からの距離（L4 と同じ）");
+        // 2 天体の角速度は 1（全質量 1、間隔 1 の円軌道）
+        let corotating = Vec3::new(-r.y, r.x, 0.0);
+        close(
+            (s.velocities[2] - v - corotating).norm(),
+            0.0,
+            "回転座標系での速さ",
+        );
+    }
+
     // 連星への侵入：連星は間隔 1 の円軌道、侵入天体は連星の重心から x 方向に 15 離れたところから
     for id in [15, 16] {
         let s = by_id(id).unwrap();
@@ -508,4 +533,105 @@ fn preset_stated_quantities_hold_in_initial_states() {
             "侵入天体の x",
         );
     }
+}
+
+/// 回転座標系での、天体 3 の角度（度、0〜360）。2 天体の重心から見て、伴星の向きから公転の向きに測る（L4 ≈ 60°、L3 ≈ 180°）
+fn synodic_angle(s: &State) -> f64 {
+    let c = (s.positions[0] * s.masses[0] + s.positions[1] * s.masses[1])
+        * (1.0 / (s.masses[0] + s.masses[1]));
+    let (a, b) = (s.positions[1] - c, s.positions[2] - c);
+    a.cross(b).z.atan2(a.dot(b)).to_degrees().rem_euclid(360.0)
+}
+
+/// V-23 ラグランジュ点：5 点とも有効ポテンシャルの勾配が 0（回転座標系で静止できる）。
+/// L1〜L3 は x 軸の上の決まった区間にあり、μ が小さいときの近似式（伴星からの距離 ≈ (μ/3)^(1/3)、L3 ≈ −(1 + 5μ/12)）に合う
+#[test]
+fn v23_lagrange_points_are_equilibria() {
+    for mu in [1e-6, JUPITER_MU, 0.01, 0.05, 0.2, 0.5] {
+        let [l1, l2, l3, l4, l5] = lagrange_points(mu);
+        let (x1, x2) = (-mu, 1.0 - mu);
+        for (k, p) in [l1, l2, l3, l4, l5].into_iter().enumerate() {
+            let (d1, d2) = (p - Vec3::new(x1, 0.0, 0.0), p - Vec3::new(x2, 0.0, 0.0));
+            let grad = p - d1 * ((1.0 - mu) / d1.norm().powi(3)) - d2 * (mu / d2.norm().powi(3));
+            assert!(
+                grad.norm() < 1e-10,
+                "μ = {mu}：L{} の勾配 {}",
+                k + 1,
+                grad.norm()
+            );
+        }
+        assert!(
+            l3.x < x1 && x1 < l1.x && l1.x < x2 && x2 < l2.x,
+            "μ = {mu}：L1〜L3 の並び"
+        );
+        assert!(
+            l4.y > 0.0 && l5.y < 0.0,
+            "μ = {mu}：L4 は公転の向きに伴星の前"
+        );
+    }
+    for mu in [1e-6, JUPITER_MU] {
+        let [l1, l2, l3, ..] = lagrange_points(mu);
+        let hill = (mu / 3.0).powf(1.0 / 3.0);
+        for (what, d) in [("L1", 1.0 - mu - l1.x), ("L2", l2.x - 1.0 + mu)] {
+            assert!(
+                (d / hill - 1.0).abs() < 0.1,
+                "μ = {mu}：{what} と伴星の距離 {d}（近似 {hill}）"
+            );
+        }
+        let approx = -(1.0 + 5.0 * mu / 12.0);
+        assert!(
+            (l3.x - approx).abs() < 10.0 * mu * mu,
+            "μ = {mu}：L3 {}（近似 {approx}）",
+            l3.x
+        );
+    }
+}
+
+/// 画面と同じ条件で、時刻 until まで 0.25 ごとに天体 3 の角度を見て、最小・最大と、mid を横切った時刻を返す
+fn synodic_range(id: u32, until: f64, mid: f64) -> (f64, f64, Vec<f64>) {
+    let mut it = page(id);
+    let (mut lo, mut hi, mut crossings) = (360.0f64, 0.0f64, vec![]);
+    let mut prev = synodic_angle(&it.state);
+    let mut t = 0.0;
+    while t < until {
+        t += 0.25;
+        it.advance_to(t);
+        let a = synodic_angle(&it.state);
+        (lo, hi) = (lo.min(a), hi.max(a));
+        // 0° と 360° のあいだの飛びは横切りに数えない
+        if (prev - mid) * (a - mid) < 0.0 && (a - prev).abs() < 90.0 {
+            crossings.push(t);
+        }
+        prev = a;
+    }
+    (lo, hi, crossings)
+}
+
+/// V-24 L4 からずらしたトロヤ群（木星の μ、画面と同じ条件）。回転座標系での角度（伴星から公転の向きに測る）が、
+/// オタマジャクシ（20° ずらす）では 100 周期のあいだ 44°〜80° を周期 約 80 で揺れ、L3（180°）に届かない。
+/// 馬蹄形（115° ずらす）では t = 3000 まで 23°〜337° を往復し、伴星（0°）をまたがない
+#[test]
+fn v24_displaced_trojans_librate_around_l4() {
+    let (lo, hi, crossings) = synodic_range(18, 100.0 * std::f64::consts::TAU, 62.0);
+    assert!(
+        (43.0..46.0).contains(&lo) && (79.0..82.0).contains(&hi),
+        "オタマジャクシの角度の範囲 {lo:.2}°〜{hi:.2}°"
+    );
+    let n = crossings.len();
+    let period = 2.0 * (crossings[n - 1] - crossings[0]) / (n - 1) as f64;
+    assert!(
+        (75.0..85.0).contains(&period),
+        "オタマジャクシの揺れの周期 {period}"
+    );
+
+    let (lo, hi, crossings) = synodic_range(19, 3000.0, 180.0);
+    assert!(
+        (20.0..26.0).contains(&lo) && (334.0..340.0).contains(&hi),
+        "馬蹄形の角度の範囲 {lo:.2}°〜{hi:.2}°"
+    );
+    assert!(
+        crossings.len() >= 10,
+        "馬蹄形が L3 をまたいだ回数 {}",
+        crossings.len()
+    );
 }

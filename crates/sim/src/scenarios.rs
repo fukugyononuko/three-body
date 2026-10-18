@@ -194,15 +194,64 @@ pub const JUPITER_MU: f64 = JUPITER_SUN_MASS_RATIO / (1.0 + JUPITER_SUN_MASS_RAT
 /// S-10 主星（質量 1 − μ）と伴星（質量 μ）が間隔 1 の円軌道を回り、ラグランジュ点 L4（両者と正三角形をなす点）に
 /// ごく軽い天体（質量 1e-9）を置く。Routh の条件から、μ < 約 0.0385 なら L4 にとどまる
 pub fn trojan(mu: f64) -> State {
+    trojan_displaced(mu, 0.0)
+}
+
+/// S-16 L4 の天体を、主星と伴星の重心の周りに angle_deg だけ前（伴星から遠ざかる向き）へ回した位置に置き、
+/// 2 天体と同じ角速度で回る速度を与える。回転座標系では、はじめ止まっていて、L4 の周りを揺れはじめる
+pub fn trojan_displaced(mu: f64, angle_deg: f64) -> State {
     let (m1, m2) = (1.0 - mu, mu);
     let ([p1, p2], [v1, v2]) = kepler_pair(m1, m2, 1.0, 0.0);
-    // 角速度 ω = 1（全質量 1、間隔 1）で、重心の周りを剛体のように回る
-    let l4 = Vec3::new(p1.x + 0.5, 3f64.sqrt() / 2.0, 0.0);
+    // 角速度 ω = 1（全質量 1、間隔 1）で、2 天体の重心の周りを剛体のように回る
+    let p = rotate_z(
+        Vec3::new(p1.x + 0.5, 3f64.sqrt() / 2.0, 0.0),
+        angle_deg.to_radians(),
+    );
     centered(State {
         masses: vec![m1, m2, 1e-9],
-        positions: vec![p1, p2, l4],
-        velocities: vec![v1, v2, Vec3::new(-l4.y, l4.x, 0.0)],
+        positions: vec![p1, p2, p],
+        velocities: vec![v1, v2, Vec3::new(-p.y, p.x, 0.0)],
     })
+}
+
+/// S-16 オタマジャクシ軌道：L4 から 20° ずらす（伴星から見て 44°〜80° のあいだを揺れる）
+pub const TADPOLE_ANGLE_DEG: f64 = 20.0;
+/// S-16 馬蹄形軌道：L4 から 115° ずらす（L3 の近くから始まり、L4・L3・L5 をまたいで往復する）
+pub const HORSESHOE_ANGLE_DEG: f64 = 115.0;
+
+/// 円制限三体問題のラグランジュ点 L1〜L5。主星（質量の割合 1 − μ）と伴星（μ）の間隔を 1、
+/// 2 天体の重心を原点、伴星を +x 軸の上（主星は −μ、伴星は 1 − μ）、公転の向きを +z とした回転座標系での位置。
+/// L1（2 天体のあいだ）・L2（伴星の外側）・L3（主星の外側）は、x 軸の上で有効ポテンシャルの勾配が 0 になる点を二分法で求める。
+/// L4・L5 は 2 天体と正三角形をなす点（L4 が公転の向きに伴星の前）
+pub fn lagrange_points(mu: f64) -> [Vec3; 5] {
+    let (x1, x2) = (-mu, 1.0 - mu);
+    // x 軸の上の、有効ポテンシャルの勾配の x 成分（遠心力 + 2 天体の引力）
+    let force = |x: f64| {
+        let (d1, d2) = (x - x1, x - x2);
+        x - (1.0 - mu) * d1 / d1.abs().powi(3) - mu * d2 / d2.abs().powi(3)
+    };
+    // 各区間で force は単調で、両端の符号が異なる
+    let root = |mut lo: f64, mut hi: f64| {
+        let rising = force(hi) > force(lo);
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            if (force(mid) > 0.0) == rising {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    };
+    let eps = 1e-12;
+    let h = 3f64.sqrt() / 2.0;
+    [
+        Vec3::new(root(x1 + eps, x2 - eps), 0.0, 0.0),
+        Vec3::new(root(x2 + eps, x2 + 2.0), 0.0, 0.0),
+        Vec3::new(root(x1 - 2.0, x1 - eps), 0.0, 0.0),
+        Vec3::new(0.5 - mu, h, 0.0),
+        Vec3::new(0.5 - mu, -h, 0.0),
+    ]
 }
 
 /// S-11 オイラーの一直線の解：質量 1 の 3 天体が間隔 1 で一直線に並んで回る（ω² = 5/4）。
@@ -336,6 +385,8 @@ pub fn by_id(id: u32) -> Option<State> {
         15 => Some(binary_exchange()),
         16 => Some(binary_ionization()),
         17 => Some(sitnikov()),
+        18 => Some(trojan_displaced(JUPITER_MU, TADPOLE_ANGLE_DEG)),
+        19 => Some(trojan_displaced(JUPITER_MU, HORSESHOE_ANGLE_DEG)),
         _ => None,
     }
 }
@@ -351,4 +402,4 @@ pub fn preset_dt(id: u32) -> f64 {
 }
 
 /// プリセットの数（by_id が Some を返す番号は 0..PRESET_COUNT）
-pub const PRESET_COUNT: u32 = 18;
+pub const PRESET_COUNT: u32 = 20;

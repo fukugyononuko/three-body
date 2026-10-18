@@ -42,6 +42,22 @@ test("S-05：プリセットの値が入力欄に入り、書き換えると「�
   await expect(page.locator("#preset")).toHaveValue("-1");
 });
 
+test("S-08〜S-15：どのプリセットも読み込めて、誤りなく計算が進む", async ({ page }) => {
+  await ready(page);
+  const values = await page.locator("#preset option").evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
+  expect(values.filter((v) => v !== "-1")).toEqual(Array.from({ length: 18 }, (_, i) => String(i)));
+  for (const value of values.filter((v) => Number(v) >= 4)) {
+    await page.selectOption("#preset", value);
+    await expect(page.locator("[data-message]")).toHaveText("");
+    await expect(page.locator("#preset")).toHaveValue(value);
+    await expect.poll(() => num(page, "time"), { timeout: 5000 }).toBeGreaterThan(0.2);
+  }
+  // Kepler-16：Doyle ほか（2011）の値が入力欄に入る
+  await page.selectOption("#preset", "12");
+  await expect(page.locator('input[name="b0-m"]')).toHaveValue("0.6897");
+  await expect(page.locator('input[name="b1-m"]')).toHaveValue("0.20255");
+});
+
 test("S-05：自分で決めた初期値で計算できる（質量・位置・速度）", async ({ page }) => {
   await ready(page);
   await setInitial(page, [

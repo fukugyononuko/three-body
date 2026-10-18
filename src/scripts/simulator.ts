@@ -135,6 +135,9 @@ function inputBuffer(): Float64Array {
   return new Float64Array(wasm.memory.buffer, wasm.sim_input(), maxBodies * FIELDS.length);
 }
 
+// 天体が強く接近するプリセット（ピタゴラス、内側の惑星、古在・リドフ、連星への侵入 2 つ）。刻み幅一定の方法の刻み幅を細かくする
+const CLOSE_ENCOUNTER_PRESETS = new Set([1, 13, 14, 15, 16]);
+
 function loadPreset(): void {
   const id = Number(presetSelect.value);
   if (id < 0) return;
@@ -148,7 +151,7 @@ function loadPreset(): void {
       input.value = String(Number(buffer[b * FIELDS.length + k].toPrecision(10)));
     }),
   );
-  dtInput.value = id === 1 ? "0.001" : "0.01";
+  dtInput.value = CLOSE_ENCOUNTER_PRESETS.has(id) ? "0.001" : "0.01";
 }
 
 // ---- 計算 ----

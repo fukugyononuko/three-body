@@ -41,7 +41,8 @@ pub extern "C" fn sim_input() -> *mut f64 {
 }
 
 /// 有名シナリオの初期値を、入力用の配列に書き出し、天体の数を返す（失敗したら 0）。
-/// 0 = 8 の字の解、1 = ピタゴラスの三体問題、2 = 8 の字＋垂直の速度、3 = 傾いた連星＋第 3 天体
+/// 番号と内容の対応は scenarios::by_id（0〜3 は 8 の字の解、ピタゴラス、8 の字＋垂直の速度、傾いた連星＋第 3 天体。
+/// 4〜17 は研究済みの周期解、ラグランジュの解、惑星、連星への侵入、シトニコフ問題）
 #[unsafe(no_mangle)]
 pub extern "C" fn sim_load_preset(scenario: u32) -> u32 {
     let Some(state) = scenarios::by_id(scenario) else {

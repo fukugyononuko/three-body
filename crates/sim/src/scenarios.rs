@@ -188,6 +188,9 @@ pub fn lagrange_triangle() -> State {
 /// 木星と太陽の質量の比（IAU 2015 Resolution B3 の公称値 GM から）
 pub const JUPITER_SUN_MASS_RATIO: f64 = 9.546e-4;
 
+/// 太陽・木星の伴星の割合 μ = m_J / (m_S + m_J)
+pub const JUPITER_MU: f64 = JUPITER_SUN_MASS_RATIO / (1.0 + JUPITER_SUN_MASS_RATIO);
+
 /// S-10 主星（質量 1 − μ）と伴星（質量 μ）が間隔 1 の円軌道を回り、ラグランジュ点 L4（両者と正三角形をなす点）に
 /// ごく軽い天体（質量 1e-9）を置く。Routh の条件から、μ < 約 0.0385 なら L4 にとどまる
 pub fn trojan(mu: f64) -> State {
@@ -260,32 +263,38 @@ pub fn kozai_lidov(inclination_deg: f64) -> State {
 pub const KOZAI_INCLINATION_DEG: f64 = 75.0;
 
 /// S-14 連星への侵入：質量 1・1 の連星（間隔 1、円軌道、z 軸の周りに `phase` ラジアン回した位置から）に、
-/// 質量 1 の天体が距離 15 から、衝突径数 `impact` で飛び込む。無限遠での速さは臨界速度 v_c の `speed` 倍
-/// （v_c は全エネルギーが 0 になる速さ。等質量では v_c² = 3/2）
+/// 質量 1 の天体が距離 15 から、衝突径数 `impact` で飛び込む。無限遠での相対速度は臨界速度 v_c の `speed` 倍
+/// （v_c は全エネルギーが 0 になる速さ。等質量では v_c² = 3/2）。
+/// 全エネルギーが、連星の結合エネルギー −1/2 と無限遠での相対運動のエネルギー (1/2)(2/3) v_inf²（換算質量 2/3）の和に
+/// 一致するよう、距離 15 での速さを、実際の位置の位置エネルギーと連星の反跳を含めて逆算する
 pub fn binary_intruder(speed: f64, impact: f64, phase: f64) -> State {
     let ([p1, p2], [v1, v2]) = kepler_pair(1.0, 1.0, 1.0, 0.0);
-    let distance = 15.0;
+    let reduced_mass = 2.0 / 3.0;
     let v_inf = speed * 1.5f64.sqrt();
-    // 連星を質量 2 の点とみなして、距離 15 での速さを求める（エネルギーの保存）
-    let v = (v_inf * v_inf + 2.0 * 2.0 / distance).sqrt();
-    centered(State {
-        masses: vec![1.0, 1.0, 1.0],
-        positions: vec![
-            rotate_z(p1, phase),
-            rotate_z(p2, phase),
-            Vec3::new(-distance, impact, 0.0),
-        ],
-        velocities: vec![
-            rotate_z(v1, phase),
-            rotate_z(v2, phase),
-            Vec3::new(v, 0.0, 0.0),
-        ],
-    })
+    let target = -0.5 + 0.5 * reduced_mass * v_inf * v_inf;
+    let build = |v: f64| {
+        centered(State {
+            masses: vec![1.0, 1.0, 1.0],
+            positions: vec![
+                rotate_z(p1, phase),
+                rotate_z(p2, phase),
+                Vec3::new(-15.0, impact, 0.0),
+            ],
+            velocities: vec![
+                rotate_z(v1, phase),
+                rotate_z(v2, phase),
+                Vec3::new(v, 0.0, 0.0),
+            ],
+        })
+    };
+    // 侵入天体の速さ v は、重心系では連星との相対速度になり、運動エネルギーを (1/2)(2/3) v² だけ増やす
+    let at_rest = build(0.0).energy();
+    build((2.0 * (target - at_rest) / reduced_mass).sqrt())
 }
 
 /// 入れ替わり：遅く飛び込んだ天体 3 が天体 1 と連星を作り、天体 2 が弾き出される
 pub fn binary_exchange() -> State {
-    binary_intruder(0.6, 0.3, 1.0)
+    binary_intruder(0.6, 0.3, 0.0)
 }
 
 /// ばらばら：臨界速度の 2 倍で飛び込み、全エネルギーが正なので 3 つとも離れていく
@@ -316,7 +325,7 @@ pub fn by_id(id: u32) -> Option<State> {
         6 => Some(suvakov(YIN_YANG_I)),
         7 => Some(suvakov(DRAGONFLY)),
         8 => Some(lagrange_triangle()),
-        9 => Some(trojan(JUPITER_SUN_MASS_RATIO)),
+        9 => Some(trojan(JUPITER_MU)),
         10 => Some(trojan(0.05)),
         11 => Some(euler_collinear()),
         12 => Some(kepler16(KEPLER16_PLANET_A)),

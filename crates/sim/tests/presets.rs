@@ -2,9 +2,10 @@
 
 use sim::integrators::{Integrator, Method};
 use sim::scenarios::{
-    BUTTERFLY_I, DRAGONFLY, JUPITER_SUN_MASS_RATIO, KEPLER16_INNER_A, KEPLER16_PLANET_A,
-    KOZAI_INCLINATION_DEG, MOTH_I, PRESET_COUNT, YIN_YANG_I, binary_exchange, binary_ionization,
-    by_id, euler_collinear, kepler16, kozai_lidov, lagrange_triangle, sitnikov, suvakov, trojan,
+    BUTTERFLY_I, DRAGONFLY, JUPITER_MU, JUPITER_SUN_MASS_RATIO, KEPLER16_INNER_A,
+    KEPLER16_PLANET_A, KOZAI_INCLINATION_DEG, MOTH_I, PRESET_COUNT, YIN_YANG_I, binary_exchange,
+    binary_ionization, by_id, euler_collinear, kepler16, kozai_lidov, lagrange_triangle, sitnikov,
+    suvakov, trojan,
 };
 use sim::{State, Vec3};
 
@@ -73,12 +74,13 @@ fn v14_suvakov_orbits_return_after_one_period() {
         ("陰陽 I", YIN_YANG_I),
         ("トンボ", DRAGONFLY),
     ] {
-        let start = suvakov(orbit);
-        assert!(start.angular_momentum().norm() < 1e-15, "{name}");
-        let mut it = rk45(start.clone(), 1e-13);
-        it.advance_to(orbit.period);
-        let err = max_position_error(&it.state, &start);
-        assert!(err < 5e-3, "{name}：1 周期後の位置のずれ {err:e}");
+        assert!(suvakov(orbit).angular_momentum().norm() < 1e-15, "{name}");
+        for start in [suvakov(orbit), rounded_like_page(suvakov(orbit))] {
+            let mut it = rk45(start.clone(), 1e-13);
+            it.advance_to(orbit.period);
+            let err = max_position_error(&it.state, &start);
+            assert!(err < 5e-3, "{name}：1 周期後の位置のずれ {err:e}");
+        }
     }
 }
 
@@ -141,9 +143,9 @@ fn trojan_angle(s: &State) -> f64 {
 #[test]
 fn v16_trojan_stability_follows_routh_criterion() {
     let mu_limit = (1.0 - (23.0f64 / 27.0).sqrt()) / 2.0;
-    assert!(JUPITER_SUN_MASS_RATIO < mu_limit && 0.05 > mu_limit);
+    assert!(JUPITER_MU < mu_limit && 0.05 > mu_limit);
 
-    let mut it = page_default(rounded_like_page(trojan(JUPITER_SUN_MASS_RATIO)));
+    let mut it = page_default(rounded_like_page(by_id(9).unwrap()));
     let mut t = 0.0;
     while t < 100.0 * std::f64::consts::TAU {
         t += 1.0;
@@ -300,5 +302,35 @@ fn v21_sitnikov_body_oscillates_on_axis() {
     assert!(
         z_min < -0.9,
         "軌道面を通り抜けて反対側まで振動する（z の最小 {z_min}）"
+    );
+}
+
+/// 連星への侵入の全エネルギーは、連星の結合エネルギー −1/2 と、無限遠での相対運動のエネルギー
+/// (1/2)(2/3) v_inf²（換算質量 2/3）の和になる。v_inf = speed · v_c、v_c² = 3/2
+#[test]
+fn binary_intruder_energy_matches_requested_speed() {
+    use sim::scenarios::binary_intruder;
+    for speed in [0.3, 0.6, 1.0, 2.0] {
+        for impact in [0.0, 0.3, 1.0] {
+            for phase in [0.0, 1.0, 2.0] {
+                let target = -0.5 + speed * speed * 1.5 / 3.0;
+                let e = binary_intruder(speed, impact, phase).energy();
+                assert!(
+                    (e - target).abs() < 1e-12,
+                    "speed {speed}、impact {impact}、phase {phase}：全エネルギー {e}、期待 {target}"
+                );
+            }
+        }
+    }
+}
+
+/// 太陽・木星・トロヤ群のプリセットで、伴星と主星の質量の比が木星と太陽の質量の比になる
+#[test]
+fn trojan_preset_uses_jupiter_sun_mass_ratio() {
+    let s = by_id(9).unwrap();
+    let q = s.masses[1] / s.masses[0];
+    assert!(
+        ((q - JUPITER_SUN_MASS_RATIO) / JUPITER_SUN_MASS_RATIO).abs() < 1e-12,
+        "伴星と主星の質量の比 {q}"
     );
 }

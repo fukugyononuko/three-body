@@ -80,3 +80,15 @@ test("V-25：rotatingFrame は null か、有限で正規直交な軸を返す�
   // ふつうの入力では null にならない
   expect(rotatingFrame(cases[5][1], cases[5][2])).not.toBeNull();
 });
+
+test("V-25：質量の合計があふれる・極小のときも、原点は 2 天体の重心、μ は伴星の質量の割合になる", () => {
+  const cases: [number, number][] = [[1e308, 1e308], [1e308, 1], [1e-308, 3e-308], [Number.MIN_VALUE, Number.MIN_VALUE]];
+  for (const [m1, m2] of cases) {
+    const frame = rotatingFrame({ m: m1, p: [0, 0, 0], v: [0, 1, 0] }, { m: m2, p: [1, 2, 0], v: [0, -1, 0] })!;
+    // 期待値は、質量の比 q = m₂ / m₁ から求める（m₁ + m₂ を直接計算しない）
+    const q = m2 / m1;
+    const mu = q / (1 + q);
+    expect(frame.mu, `m = ${m1}, ${m2}`).toBeCloseTo(mu, 12);
+    close(frame.origin, [mu, 2 * mu, 0]);
+  }
+});

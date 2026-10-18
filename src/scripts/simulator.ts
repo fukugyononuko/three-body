@@ -44,6 +44,7 @@ const INIT_ERRORS: Record<number, string> = {
   4: "2 つの天体が同じ位置にあります。位置をずらしてください。",
 };
 const DEFAULT_VIEW = { az: -0.6, el: 0.45 };
+const FRAME_ERROR = "いまは回転座標系を決められません（主星と伴星が重なっているか、値が大きすぎます）。静止座標系に切り替えると表示できます。";
 
 const $ = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
 const root = $<HTMLElement>("[data-simulator]");
@@ -219,14 +220,17 @@ function currentFrame(): Frame | null {
   return rotatingFrame(body(pair[0]), body(pair[1]));
 }
 
-/** 各天体の、重心を引いた位置と、回転座標系での位置（座標系が決まらないときは、重心を引いた位置で代える） */
+/** 各天体の、重心を引いた位置と、回転座標系での位置。座標系が決まらないとき（2 天体が重なる、値があふれる）は、
+ * 回転座標系での位置を NaN にする（ほかの座標系の位置で代えると、回転座標系の軌跡に混ざる）。NaN の点は描かない */
 function sample(slot: number, frame: Frame | null): [V3, V3][] {
   const c = com(MAIN);
   return positions(slot).map((p): [V3, V3] => {
     const relative: V3 = [p[0] - c[0], p[1] - c[1], p[2] - c[2]];
-    return [relative, frame ? toFrame(frame, p) : relative];
+    return [relative, frame ? toFrame(frame, p) : [NaN, NaN, NaN]];
   });
 }
+
+const isFinitePoint = (p: V3) => p.every(Number.isFinite);
 
 const trailPoint = ([relative, rotated]: [V3, V3], t: number): TrailPoint => [...relative, t, ...rotated];
 
@@ -283,8 +287,9 @@ function fitView(all = false): void {
   let need = all ? 0 : view.half;
   for (const trail of trails) for (const body of trail) {
     for (const point of all ? body : body.slice(-1)) {
-      const [x, y, z] = shown(point);
-      need = Math.max(need, Math.abs(x) * 1.15, Math.abs(y) * 1.15, Math.abs(z) * 1.15);
+      const p = shown(point);
+      if (!isFinitePoint(p)) continue;
+      need = Math.max(need, ...p.map((v) => Math.abs(v) * 1.15));
     }
   }
   view.half = Math.max(need, 0.5);
@@ -330,6 +335,10 @@ function drawOrbits(): void {
   const half = view.half / view.zoom;
   const current = trails.map((trail) => trail.map((body) => shown(body[body.length - 1])));
   const marks = lagrangeMarks();
+  // 回転座標系がいま決まらないときは、理由を表示する（決まったら消す）
+  const undetermined = rotatingToggle.checked && current.length > 0 && !current[0].every(isFinitePoint);
+  if (undetermined) message.textContent = FRAME_ERROR;
+  else if (message.textContent === FRAME_ERROR) message.textContent = "";
   for (const panel of panels()) {
     const scale = Math.min(panel.w, panel.h) / (2 * half);
     const cx = panel.x + panel.w / 2;
@@ -387,10 +396,18 @@ function drawOrbits(): void {
           if (to <= from) continue;
           g.globalAlpha = fade ? 0.15 + (0.85 * (band + 1)) / bands : 1;
           g.beginPath();
+          // 描けない点（NaN）では線を切る
+          let penDown = false;
           for (let k = from; k <= to; k++) {
-            const [sx, sy] = toScreen(shown(points[k]));
-            if (k === from) g.moveTo(sx, sy);
-            else g.lineTo(sx, sy);
+            const p = shown(points[k]);
+            if (!isFinitePoint(p)) {
+              penDown = false;
+              continue;
+            }
+            const [sx, sy] = toScreen(p);
+            if (penDown) g.lineTo(sx, sy);
+            else g.moveTo(sx, sy);
+            penDown = true;
           }
           g.stroke();
         }
@@ -401,6 +418,7 @@ function drawOrbits(): void {
     // 2. 天体の現在の位置（すべての線の上に描く）
     slots.forEach((_, s) => {
       for (let i = 0; i < bodies; i++) {
+        if (!isFinitePoint(current[s][i])) continue;
         const [sx, sy] = toScreen(current[s][i]);
         g.fillStyle = colorOf(i);
         g.strokeStyle = css("--paper");
@@ -417,6 +435,7 @@ function drawOrbits(): void {
     g.fillStyle = css("--text");
     g.font = `16px ${css("--font-body")}`;
     for (let i = 0; i < bodies; i++) {
+      if (!isFinitePoint(current[0][i])) continue;
       const [sx, sy] = toScreen(current[0][i]);
       g.fillText(String(i + 1), sx + 8, sy - 6);
     }

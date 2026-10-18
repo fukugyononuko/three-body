@@ -306,3 +306,26 @@ test("回転座標系：プリセットごとに座標系・再生の速さ・�
   await page.selectOption("#preset", "0");
   await expect(page.locator("#rotating")).not.toBeChecked();
 });
+
+test("回転座標系：座標系が決まらないとき（主星と伴星の差があふれる）は、回転座標系に何も描かず理由を表示し、静止座標の点を混ぜない", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" }); // 自動で再生しない（初期状態だけを描く）
+  await ready(page);
+  await setInitial(page, [
+    [1, -1e308, 0, 0, 0, 0, 0],
+    [1, 1e308, 0, 0, 0, 0, 0],
+    [1, 1, 0, 0, 0, 0, 0],
+  ]);
+  await page.check("#rotating");
+  await page.click("#apply");
+  await expect(page.locator("[data-message]")).toContainText("回転座標系");
+  const colored = () =>
+    page.locator("#orbits").evaluate((c: HTMLCanvasElement) => {
+      const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+      let count = 0;
+      for (let i = 0; i < d.length; i += 4) if (Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]) > 60) count++;
+      return count;
+    });
+  expect(await colored()).toBe(0);
+  await page.uncheck("#rotating");
+  expect(await colored()).toBeGreaterThan(0);
+});

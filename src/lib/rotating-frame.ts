@@ -35,9 +35,13 @@ const unit = (a: V3): V3 | null => {
 
 /** 主星と伴星から回転座標系を作る。座標系が決まらないとき（2 天体が重なる、値があふれる、NaN を含む）は null */
 export function rotatingFrame(primary: Body, secondary: Body): Frame | null {
-  const m = primary.m + secondary.m;
-  const origin = scale([0, 1, 2].map((k) => primary.p[k] * primary.m + secondary.p[k] * secondary.m) as V3, 1 / m);
+  // 質量の合計や、質量と位置の積は、あふれたり 0 に落ちたりする。大きいほうの質量で割った比から μ を求め、
+  // 原点（2 天体の重心）は主星から伴星へ μ だけ進んだ点として求める
+  const big = Math.max(primary.m, secondary.m);
+  const [w1, w2] = [primary.m / big, secondary.m / big];
+  const mu = w2 / (w1 + w2);
   const r = sub(secondary.p, primary.p);
+  const origin = [0, 1, 2].map((k) => primary.p[k] + mu * (secondary.p[k] - primary.p[k])) as V3;
   const x = unit(r);
   if (!x) return null;
   // z′ は、2 天体の相対運動の角運動量の向き。それが 0（正面からぶつかる向きの運動）か、あふれるときは、
@@ -50,7 +54,7 @@ export function rotatingFrame(primary: Body, secondary: Body): Frame | null {
     if (z) break;
   }
   if (!z) return null;
-  const frame: Frame = { origin, axes: [x, cross(z, x), z], separation: Math.hypot(...r), mu: secondary.m / m };
+  const frame: Frame = { origin, axes: [x, cross(z, x), z], separation: Math.hypot(...r), mu };
   // 返す値はすべて有限にする（質量や位置に NaN やあふれる値があると、原点・間隔・μ が有限でなくなる）
   return finite([...frame.origin, ...frame.axes.flat(), frame.separation, frame.mu]) ? frame : null;
 }

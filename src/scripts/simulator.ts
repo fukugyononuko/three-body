@@ -6,6 +6,7 @@ interface SimExports {
   sim_max_bodies(): number;
   sim_input(): number;
   sim_load_preset(scenario: number): number;
+  sim_preset_dt(scenario: number): number;
   sim_init(slot: number, n: number, method: number, dt: number, tolerance: number): number;
   sim_advance(slot: number, t: number): void;
   sim_time(slot: number): number;
@@ -148,7 +149,7 @@ function loadPreset(): void {
       input.value = String(Number(buffer[b * FIELDS.length + k].toPrecision(10)));
     }),
   );
-  dtInput.value = id === 1 ? "0.001" : "0.01";
+  dtInput.value = String(wasm.sim_preset_dt(id));
 }
 
 // ---- 計算 ----

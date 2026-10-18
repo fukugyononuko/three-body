@@ -4,8 +4,8 @@ use sim::integrators::{Integrator, Method};
 use sim::scenarios::{
     BUTTERFLY_I, DRAGONFLY, JUPITER_MU, JUPITER_SUN_MASS_RATIO, KEPLER16_INNER_A,
     KEPLER16_PLANET_A, KOZAI_INCLINATION_DEG, MOTH_I, PRESET_COUNT, YIN_YANG_I, binary_exchange,
-    binary_ionization, by_id, euler_collinear, kepler16, kozai_lidov, lagrange_triangle, sitnikov,
-    suvakov, trojan,
+    binary_ionization, by_id, euler_collinear, kepler16, kozai_lidov, lagrange_triangle, preset_dt,
+    sitnikov, suvakov, trojan,
 };
 use sim::{State, Vec3};
 
@@ -15,9 +15,16 @@ fn rk45(state: State, tolerance: f64) -> Integrator {
     it
 }
 
-/// 画面の既定（RK45、許容誤差 1e-10）
-fn page_default(state: State) -> Integrator {
-    rk45(state, 1e-10)
+/// 画面の既定：RK45、許容誤差 1e-10、最初の刻み幅はプリセット `id` の既定（画面も sim_preset_dt で同じ値を使う）
+fn page_default(state: State, id: u32) -> Integrator {
+    let mut it = Integrator::new(state, Method::Rk45, preset_dt(id));
+    it.tolerance = 1e-10;
+    it
+}
+
+/// 画面と同じ条件：プリセット `id` の値を有効数字 10 桁に丸めた初期値を、画面の既定で計算する
+fn page(id: u32) -> Integrator {
+    page_default(rounded_like_page(by_id(id).unwrap()), id)
 }
 
 fn max_position_error(a: &State, b: &State) -> f64 {
@@ -64,21 +71,44 @@ fn every_preset_is_valid() {
     assert!(by_id(PRESET_COUNT).is_none());
 }
 
+/// テストは番号（画面の option の value）でプリセットを引くので、番号と初期値の対応を確かめる
+#[test]
+fn preset_ids_match_scenarios() {
+    let expected = [
+        (4, suvakov(BUTTERFLY_I)),
+        (5, suvakov(MOTH_I)),
+        (6, suvakov(YIN_YANG_I)),
+        (7, suvakov(DRAGONFLY)),
+        (8, lagrange_triangle()),
+        (9, trojan(JUPITER_MU)),
+        (10, trojan(0.05)),
+        (11, euler_collinear()),
+        (12, kepler16(KEPLER16_PLANET_A)),
+        (13, kepler16(KEPLER16_INNER_A)),
+        (14, kozai_lidov(KOZAI_INCLINATION_DEG)),
+        (15, binary_exchange()),
+        (16, binary_ionization()),
+        (17, sitnikov()),
+    ];
+    for (id, state) in expected {
+        assert_eq!(by_id(id), Some(state), "プリセット {id}");
+    }
+}
+
 /// V-14 Šuvakov & Dmitrašinović (2013) の周期解が、1 周期後に初期状態に戻る。角運動量は 0。
 /// 初期値は 5〜15 桁なので、戻り方はその精度まで
 #[test]
 fn v14_suvakov_orbits_return_after_one_period() {
-    for (name, orbit) in [
-        ("蝶 I", BUTTERFLY_I),
-        ("蛾 I", MOTH_I),
-        ("陰陽 I", YIN_YANG_I),
-        ("トンボ", DRAGONFLY),
+    for (name, orbit, id) in [
+        ("蝶 I", BUTTERFLY_I, 4),
+        ("蛾 I", MOTH_I, 5),
+        ("陰陽 I", YIN_YANG_I, 6),
+        ("トンボ", DRAGONFLY, 7),
     ] {
         assert!(suvakov(orbit).angular_momentum().norm() < 1e-15, "{name}");
-        // 文献の初期値を高い精度で積分したものと、画面と同じ条件（丸めた初期値、RK45、許容誤差 1e-10）のもの
+        // 文献の初期値を高い精度で積分したものと、画面と同じ条件のもの
         let precise = rk45(suvakov(orbit), 1e-13);
-        let page = page_default(rounded_like_page(suvakov(orbit)));
-        for (label, mut it) in [("高い精度", precise), ("画面の条件", page)] {
+        for (label, mut it) in [("高い精度", precise), ("画面の条件", page(id))] {
             let start = it.state.clone();
             it.advance_to(orbit.period);
             let err = max_position_error(&it.state, &start);
@@ -93,8 +123,8 @@ fn v14_suvakov_orbits_return_after_one_period() {
 /// V-14 周期解は不安定なので、やがて崩れる（蝶 I は t ≈ 130 で周期から外れる：Li & Liao, arXiv:1312.6796）
 #[test]
 fn v14_butterfly_eventually_departs() {
-    let start = rounded_like_page(suvakov(BUTTERFLY_I));
-    let mut it = page_default(start.clone());
+    let mut it = page(4);
+    let start = it.state.clone();
     it.advance_to(BUTTERFLY_I.period * 10.0);
     let early = max_position_error(&it.state, &start);
     it.advance_to(BUTTERFLY_I.period * 40.0);
@@ -116,8 +146,7 @@ fn sides(s: &State) -> [f64; 3] {
 /// V-15 ラグランジュの正三角形の解（等質量）：はじめは正三角形のまま回るが、不安定なので崩れる
 #[test]
 fn v15_lagrange_triangle_is_unstable_for_equal_masses() {
-    for start in [lagrange_triangle(), rounded_like_page(lagrange_triangle())] {
-        let mut it = page_default(start);
+    for mut it in [page_default(lagrange_triangle(), 8), page(8)] {
         let period = std::f64::consts::TAU / 3f64.sqrt();
         it.advance_to(period);
         for d in sides(&it.state) {
@@ -151,7 +180,7 @@ fn v16_trojan_stability_follows_routh_criterion() {
     let mu_limit = (1.0 - (23.0f64 / 27.0).sqrt()) / 2.0;
     assert!(JUPITER_MU < mu_limit && 0.05 > mu_limit);
 
-    let mut it = page_default(rounded_like_page(by_id(9).unwrap()));
+    let mut it = page(9);
     let mut t = 0.0;
     while t < 100.0 * std::f64::consts::TAU {
         t += 1.0;
@@ -160,7 +189,7 @@ fn v16_trojan_stability_follows_routh_criterion() {
         assert!((a - 60.0).abs() < 1.0, "木星：時刻 {t} の角度 {a}°");
     }
 
-    let mut it = page_default(rounded_like_page(trojan(0.05)));
+    let mut it = page(10);
     let mut worst: f64 = 0.0;
     let mut t = 0.0;
     while t < 30.0 * std::f64::consts::TAU {
@@ -181,7 +210,7 @@ fn v17_euler_collinear_is_unstable() {
         u.cross(w).norm() / u.norm()
     };
     let period = std::f64::consts::TAU / 1.25f64.sqrt();
-    let mut it = page_default(rounded_like_page(euler_collinear()));
+    let mut it = page(11);
     let (mut first, mut later): (f64, f64) = (0.0, 0.0);
     let mut t = 0.0;
     while t < 30.0 {
@@ -209,7 +238,7 @@ fn planet_distance(s: &State) -> f64 {
 /// 安定限界の内側（a = 0.5 AU）に置いた惑星は飛ばされる
 #[test]
 fn v18_kepler16_planet_stability() {
-    let mut it = page_default(rounded_like_page(kepler16(KEPLER16_PLANET_A)));
+    let mut it = page(12);
     let mut t = 0.0;
     while t < 1000.0 {
         t += 0.5;
@@ -218,15 +247,14 @@ fn v18_kepler16_planet_stability() {
         assert!((0.6..0.8).contains(&d), "時刻 {t}：惑星の距離 {d} AU");
     }
 
-    let mut it = page_default(rounded_like_page(kepler16(KEPLER16_INNER_A)));
+    let mut it = page(13);
     it.advance_to(200.0);
     let d = planet_distance(&it.state);
     assert!(d > 10.0, "内側の惑星は飛ばされる（時刻 200 の距離 {d} AU）");
 }
 
 /// 惑星（天体 2）の、星（天体 1）に対する軌道の離心率の、時刻 until までの最大
-fn max_inner_eccentricity(start: State, until: f64) -> f64 {
-    let mut it = page_default(start);
+fn max_inner_eccentricity(mut it: Integrator, until: f64) -> f64 {
     let mut e_max: f64 = 0.0;
     let mut t = 0.0;
     while t < until {
@@ -243,9 +271,9 @@ fn max_inner_eccentricity(start: State, until: f64) -> f64 {
 /// 臨界の傾き（約 39.2°）より小さい 30° では大きくならない
 #[test]
 fn v19_kozai_lidov_raises_eccentricity_only_above_critical_inclination() {
-    let high = max_inner_eccentricity(rounded_like_page(kozai_lidov(KOZAI_INCLINATION_DEG)), 400.0);
+    let high = max_inner_eccentricity(page(14), 400.0);
     assert!(high > 0.9, "傾き 75°：離心率の最大 {high}");
-    let low = max_inner_eccentricity(kozai_lidov(30.0), 400.0);
+    let low = max_inner_eccentricity(page_default(kozai_lidov(30.0), 14), 400.0);
     assert!(low < 0.1, "傾き 30°：離心率の最大 {low}");
 }
 
@@ -266,15 +294,13 @@ fn binary_and_escaper(s: &State) -> Option<((usize, usize), usize)> {
 /// ばらばら：全エネルギーが正で、どの 2 体も束縛されず離れていく
 #[test]
 fn v20_binary_intruder_outcomes() {
-    for start in [binary_exchange(), rounded_like_page(binary_exchange())] {
-        assert!(start.energy() < 0.0);
-        let mut it = page_default(start);
+    assert!(binary_exchange().energy() < 0.0);
+    for mut it in [page_default(binary_exchange(), 15), page(15)] {
         it.advance_to(300.0);
         assert_eq!(binary_and_escaper(&it.state), Some(((0, 2), 1)));
     }
-    for start in [binary_ionization(), rounded_like_page(binary_ionization())] {
-        assert!(start.energy() > 0.0, "全エネルギー {}", start.energy());
-        let mut it = page_default(start);
+    assert!(binary_ionization().energy() > 0.0);
+    for mut it in [page_default(binary_ionization(), 16), page(16)] {
         it.advance_to(300.0);
         for (i, j) in [(0, 1), (0, 2), (1, 2)] {
             let (_, a) = two_body_elements(&it.state, i, j);
@@ -290,7 +316,7 @@ fn v20_binary_intruder_outcomes() {
 /// V-21 シトニコフ問題：軽い天体は軸（z 軸）の上にとどまり、上下に振動し続ける（離れていかない）
 #[test]
 fn v21_sitnikov_body_oscillates_on_axis() {
-    let mut it = page_default(rounded_like_page(sitnikov()));
+    let mut it = page(17);
     let (mut z_min, mut z_max) = (f64::MAX, f64::MIN);
     let mut t = 0.0;
     while t < 1000.0 {

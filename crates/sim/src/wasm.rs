@@ -66,6 +66,12 @@ pub extern "C" fn sim_load_preset(scenario: u32) -> u32 {
     state.len() as u32
 }
 
+/// プリセットの最初の刻み幅（scenarios::preset_dt）。画面の「刻み幅 h」の既定にする
+#[unsafe(no_mangle)]
+pub extern "C" fn sim_preset_dt(scenario: u32) -> f64 {
+    scenarios::preset_dt(scenario)
+}
+
 /// 入力用の配列の先頭 n 天体の初期値で計算器を用意する。method：0 = RK4、1 = RK45、2 = リープフロッグ法。
 /// dt は刻み幅（RK45 では最初に試す刻み幅）、tolerance は RK45 の許容誤差。
 /// 戻り値：1 = 成功、0 = 天体の数・積分法・刻み幅・許容誤差の誤り、2 = 質量の誤り、3 = 位置や速度が有限でない、4 = 天体が重なっている

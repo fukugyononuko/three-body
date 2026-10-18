@@ -6,6 +6,7 @@ interface SimExports {
   sim_max_bodies(): number;
   sim_input(): number;
   sim_load_preset(scenario: number): number;
+  sim_preset_dt(scenario: number): number;
   sim_init(slot: number, n: number, method: number, dt: number, tolerance: number): number;
   sim_advance(slot: number, t: number): void;
   sim_time(slot: number): number;
@@ -135,9 +136,6 @@ function inputBuffer(): Float64Array {
   return new Float64Array(wasm.memory.buffer, wasm.sim_input(), maxBodies * FIELDS.length);
 }
 
-// 天体が強く接近するプリセット（ピタゴラス、内側の惑星、古在・リドフ、連星への侵入 2 つ）。刻み幅一定の方法の刻み幅を細かくする
-const CLOSE_ENCOUNTER_PRESETS = new Set([1, 13, 14, 15, 16]);
-
 function loadPreset(): void {
   const id = Number(presetSelect.value);
   if (id < 0) return;
@@ -151,7 +149,7 @@ function loadPreset(): void {
       input.value = String(Number(buffer[b * FIELDS.length + k].toPrecision(10)));
     }),
   );
-  dtInput.value = CLOSE_ENCOUNTER_PRESETS.has(id) ? "0.001" : "0.01";
+  dtInput.value = String(wasm.sim_preset_dt(id));
 }
 
 // ---- 計算 ----

@@ -52,6 +52,11 @@ test("S-08〜S-15：どのプリセットも読み込めて、誤りなく計算
     await expect(page.locator("#preset")).toHaveValue(value);
     await expect.poll(() => num(page, "time"), { timeout: 5000 }).toBeGreaterThan(0.2);
   }
+  // 刻み幅の既定はプリセットごと（Rust の scenarios::preset_dt）：崩れて接近をくり返す正三角形は 0.001、8 の字は 0.01
+  await page.selectOption("#preset", "8");
+  await expect(page.locator("#dt")).toHaveValue("0.001");
+  await page.selectOption("#preset", "0");
+  await expect(page.locator("#dt")).toHaveValue("0.01");
   // Kepler-16：Doyle ほか（2011）の値が入力欄に入る
   await page.selectOption("#preset", "12");
   await expect(page.locator('input[name="b0-m"]')).toHaveValue("0.6897");

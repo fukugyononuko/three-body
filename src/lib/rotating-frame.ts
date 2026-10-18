@@ -25,16 +25,31 @@ const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const scale = (a: V3, k: number): V3 => [a[0] * k, a[1] * k, a[2] * k];
 const finite = (values: number[]) => values.every(Number.isFinite);
-/** 単位ベクトル。成分ごとに長さで割る（極小の長さの逆数はあふれるため）。長さが 0 か、結果が有限でなければ null */
+const largest = (a: V3) => Math.max(Math.abs(a[0]), Math.abs(a[1]), Math.abs(a[2]));
+/** 長さ。いちばん大きい成分で割ってから求める（極小の成分の 2 乗は 0 や非正規化数に落ち、極大の成分の 2 乗はあふれるため） */
+const norm = (a: V3): number => {
+  const k = largest(a);
+  return k > 0 && Number.isFinite(k) ? k * Math.hypot(a[0] / k, a[1] / k, a[2] / k) : k;
+};
+/** 単位ベクトル。いちばん大きい成分で割ってから長さで割る。長さが 0 か、結果が有限でなければ null */
 const unit = (a: V3): V3 | null => {
-  const n = Math.hypot(...a);
-  if (!(n > 0)) return null;
-  const u: V3 = [a[0] / n, a[1] / n, a[2] / n];
+  const k = largest(a);
+  if (!(k > 0) || !Number.isFinite(k)) return null;
+  const b: V3 = [a[0] / k, a[1] / k, a[2] / k];
+  const n = Math.hypot(...b);
+  const u: V3 = [b[0] / n, b[1] / n, b[2] / n];
   return finite(u) ? u : null;
 };
+/** 3 本の軸が正規直交か（許容 1e-12） */
+const orthonormal = ([x, y, z]: [V3, V3, V3]) =>
+  [[x, x, 1], [y, y, 1], [z, z, 1], [x, y, 0], [y, z, 0], [z, x, 0]].every(
+    ([a, b, expected]) => Math.abs(dot(a as V3, b as V3) - (expected as number)) < 1e-12,
+  );
 
-/** 主星と伴星から回転座標系を作る。座標系が決まらないとき（2 天体が重なる、値があふれる、NaN を含む）は null */
+/** 主星と伴星から回転座標系を作る。返すのは、null か、有限で正規直交な軸を持つ座標系だけ。
+ * 座標系が決まらないとき（入力に有限でない値がある、2 天体が重なる、値があふれる）は null */
 export function rotatingFrame(primary: Body, secondary: Body): Frame | null {
+  if (![primary, secondary].every((b) => finite([b.m, ...b.p, ...b.v]))) return null;
   // 質量の合計や、質量と位置の積は、あふれたり 0 に落ちたりする。大きいほうの質量で割った比から μ を求め、
   // 原点（2 天体の重心）は主星から伴星へ μ だけ進んだ点として求める
   const big = Math.max(primary.m, secondary.m);
@@ -50,13 +65,14 @@ export function rotatingFrame(primary: Body, secondary: Body): Frame | null {
   let z: V3 | null = null;
   for (const c of candidates) {
     const w = sub(c, scale(x, dot(c, x)));
-    if (Math.hypot(...w) > 1e-9 * Math.hypot(...c)) z = unit(w);
+    if (norm(w) > 1e-9 * norm(c)) z = unit(w);
     if (z) break;
   }
   if (!z) return null;
-  const frame: Frame = { origin, axes: [x, cross(z, x), z], separation: Math.hypot(...r), mu };
-  // 返す値はすべて有限にする（質量や位置に NaN やあふれる値があると、原点・間隔・μ が有限でなくなる）
-  return finite([...frame.origin, ...frame.axes.flat(), frame.separation, frame.mu]) ? frame : null;
+  const frame: Frame = { origin, axes: [x, cross(z, x), z], separation: norm(r), mu };
+  // 返す値の条件（すべて有限、軸は正規直交）を、ここでまとめて確かめる。途中の計算で条件が崩れる入力があっても、
+  // 崩れた座標系は返さない
+  return finite([...frame.origin, ...frame.axes.flat(), frame.separation, frame.mu]) && orthonormal(frame.axes) ? frame : null;
 }
 
 /** 静止座標系の位置を、回転座標系の (x′, y′, z′) に移す */

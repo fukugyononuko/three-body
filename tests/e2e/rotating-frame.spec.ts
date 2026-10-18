@@ -92,3 +92,33 @@ test("V-25：質量の合計があふれる・極小のときも、原点は 2 �
     close(frame.origin, [mu, 2 * mu, 0]);
   }
 });
+
+test("V-25：どの大きさ・向きの間隔と、どんな速度（NaN・無限大・あふれる値を含む）でも、null か、有限で正規直交な軸を返す", () => {
+  const sizes = [Number.MIN_VALUE, 1e-310, 1e-300, 1, 1e300, 1e308];
+  const directions: V3[] = [[1, 0, 0], [1, 1, 0], [1, 1, 1], [-1, 2, -3], [0, 0, 1]];
+  const velocities: V3[] = [[0, 0, 0], [0, 1, 0], [NaN, 0, 0], [0, Infinity, 0], [0, 1e300, 1e300], [1e-320, 0, 1e-320]];
+  let returned = 0;
+  for (const size of sizes) for (const dir of directions) for (const v of velocities) {
+    const p: V3 = dir.map((d) => d * size) as V3;
+    const name = `間隔 ${size}・向き ${dir}・速度 ${v}`;
+    const frame = rotatingFrame({ m: 1, p: [0, 0, 0], v }, { m: 1, p, v: [0, 0, 0] });
+    if (v.some((c) => !Number.isFinite(c))) {
+      expect(frame, `${name}：有限でない入力は null`).toBeNull();
+      continue;
+    }
+    if (!frame) continue;
+    returned++;
+    const values = [...frame.origin, ...frame.axes.flat(), frame.separation, frame.mu];
+    expect(values.every(Number.isFinite), name).toBe(true);
+    const [x, y, z] = frame.axes;
+    for (const [a, b, expected] of [[x, x, 1], [y, y, 1], [z, z, 1], [x, y, 0], [y, z, 0], [z, x, 0]] as [V3, V3, number][]) {
+      expect(Math.abs(dot(a, b) - expected), name).toBeLessThan(1e-12);
+    }
+    // x′ は主星から伴星への向き
+    const n = Math.hypot(...dir);
+    expect(Math.abs(dot(x, dir.map((d) => d / n) as V3) - 1), name).toBeLessThan(1e-12);
+  }
+  // 極小の間隔でも、斜めの向きで座標系が返ること（すべて null にして条件を満たすのではない）
+  expect(rotatingFrame({ m: 1, p: [0, 0, 0], v: [0, 0, 0] }, { m: 1, p: [Number.MIN_VALUE, Number.MIN_VALUE, 0], v: [0, 0, 0] })).not.toBeNull();
+  expect(returned).toBeGreaterThan(50);
+});

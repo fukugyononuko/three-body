@@ -15,7 +15,8 @@ fn rk45(state: State, tolerance: f64) -> Integrator {
     it
 }
 
-/// 画面の既定：RK45、許容誤差 1e-10、最初の刻み幅はプリセット `id` の既定（画面も sim_preset_dt で同じ値を使う）
+/// 画面の既定：RK45、許容誤差 1e-10、最初の刻み幅はプリセット `id` の既定（画面も sim_preset_dt で同じ値を使う）。
+/// 積分法と許容誤差の既定は、ページの入力欄の値と同じであることを e2e で確かめている（tests/e2e/simulator.spec.ts）
 fn page_default(state: State, id: u32) -> Integrator {
     let mut it = Integrator::new(state, Method::Rk45, preset_dt(id));
     it.tolerance = 1e-10;
@@ -412,4 +413,99 @@ fn page_text_times_match_page_conditions() {
     // 入れ替わり：t ≈ 30 で天体 1・3 の連星と、去っていく天体 2 に分かれる
     let t = first(15, &|s| binary_and_escaper(s).is_some(), 0.5);
     assert!((25.0..35.0).contains(&t), "入れ替わりが決着する時刻 {t}");
+}
+
+/// ページの 3 章に書いた物理量を、作った初期状態から測って確かめる（振り返り 2026-10-18 の T-01）。
+/// 帰結（安定・不安定、結末）のテストは、パラメーターの取り違えを見逃すことがあるため
+#[test]
+fn preset_stated_quantities_hold_in_initial_states() {
+    let close =
+        |a: f64, b: f64, what: &str| assert!((a - b).abs() < 1e-9, "{what}：{a}（期待 {b}）");
+    // 重心からの、i・j の 2 体の重心の位置と速度
+    let pair_com = |s: &State, i: usize, j: usize| {
+        let m = s.masses[i] + s.masses[j];
+        (
+            (s.positions[i] * s.masses[i] + s.positions[j] * s.masses[j]) * (1.0 / m),
+            (s.velocities[i] * s.masses[i] + s.velocities[j] * s.masses[j]) * (1.0 / m),
+        )
+    };
+
+    // Kepler-16：星 0.6897・0.20255、a = 0.22431 AU、e = 0.15944、惑星は木星の 0.333 倍、2 つの星の重心から 0.7048 AU の円軌道
+    let s = by_id(12).unwrap();
+    close(s.masses[0], 0.6897, "Kepler-16 A の質量");
+    close(s.masses[1], 0.20255, "Kepler-16 B の質量");
+    close(
+        s.masses[2] / JUPITER_SUN_MASS_RATIO,
+        0.333,
+        "惑星の質量（木星の何倍か）",
+    );
+    let (e, a) = two_body_elements(&s, 0, 1);
+    close(a, 0.22431, "連星の軌道長半径");
+    close(e, 0.15944, "連星の離心率");
+    let (c, v) = pair_com(&s, 0, 1);
+    let (r, u) = (s.positions[2] - c, s.velocities[2] - v);
+    close(r.norm(), KEPLER16_PLANET_A, "惑星の距離");
+    close(r.dot(u), 0.0, "惑星は円軌道（動径方向の速度 0）");
+    close(
+        u.norm(),
+        ((s.masses[0] + s.masses[1]) / r.norm()).sqrt(),
+        "惑星の円軌道の速さ",
+    );
+    close(
+        by_id(13)
+            .map(|s| (s.positions[2] - pair_com(&s, 0, 1).0).norm())
+            .unwrap(),
+        KEPLER16_INNER_A,
+        "内側の惑星の距離",
+    );
+
+    // 古在・リドフ：惑星 0.001 は a = 1、e = 0.05、外側の星 1 は半径 5、軌道面の傾き 75°
+    let s = by_id(14).unwrap();
+    close(s.masses[1], 0.001, "惑星の質量");
+    let (e, a) = two_body_elements(&s, 0, 1);
+    close(a, 1.0, "惑星の軌道長半径");
+    close(e, 0.05, "惑星の離心率");
+    let (c, v) = pair_com(&s, 0, 1);
+    let (r, u) = (s.positions[2] - c, s.velocities[2] - v);
+    close(r.norm(), 5.0, "外側の星の距離");
+    let inner = (s.positions[1] - s.positions[0]).cross(s.velocities[1] - s.velocities[0]);
+    let outer = r.cross(u);
+    let angle = (inner.dot(outer) / (inner.norm() * outer.norm()))
+        .acos()
+        .to_degrees();
+    close(angle, KOZAI_INCLINATION_DEG, "軌道面の傾き");
+
+    // シトニコフ：連星 0.5・0.5 は a = 1、e = 0.1。軽い天体は重心の軸の上 z = 1 に静止
+    let s = by_id(17).unwrap();
+    let (e, a) = two_body_elements(&s, 0, 1);
+    close(a, 1.0, "連星の軌道長半径");
+    close(e, 0.1, "連星の離心率");
+    let (c, v) = pair_com(&s, 0, 1);
+    close((s.positions[2] - c).z, 1.0, "軽い天体の高さ");
+    close((s.velocities[2] - v).norm(), 0.0, "軽い天体は静止");
+
+    // トロヤ群：L4 の天体は、主星・伴星の両方から距離 1（正三角形）
+    for id in [9, 10] {
+        let s = by_id(id).unwrap();
+        for k in [0, 1] {
+            close(
+                (s.positions[2] - s.positions[k]).norm(),
+                1.0,
+                "L4 までの距離",
+            );
+        }
+    }
+
+    // 連星への侵入：連星は間隔 1 の円軌道、侵入天体は連星の重心から x 方向に 15 離れたところから
+    for id in [15, 16] {
+        let s = by_id(id).unwrap();
+        let (e, a) = two_body_elements(&s, 0, 1);
+        close(a, 1.0, "連星の軌道長半径");
+        close(e, 0.0, "連星の離心率");
+        close(
+            (s.positions[2] - pair_com(&s, 0, 1).0).x,
+            -15.0,
+            "侵入天体の x",
+        );
+    }
 }

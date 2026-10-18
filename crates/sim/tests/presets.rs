@@ -75,11 +75,17 @@ fn v14_suvakov_orbits_return_after_one_period() {
         ("トンボ", DRAGONFLY),
     ] {
         assert!(suvakov(orbit).angular_momentum().norm() < 1e-15, "{name}");
-        for start in [suvakov(orbit), rounded_like_page(suvakov(orbit))] {
-            let mut it = rk45(start.clone(), 1e-13);
+        // 文献の初期値を高い精度で積分したものと、画面と同じ条件（丸めた初期値、RK45、許容誤差 1e-10）のもの
+        let precise = rk45(suvakov(orbit), 1e-13);
+        let page = page_default(rounded_like_page(suvakov(orbit)));
+        for (label, mut it) in [("高い精度", precise), ("画面の条件", page)] {
+            let start = it.state.clone();
             it.advance_to(orbit.period);
             let err = max_position_error(&it.state, &start);
-            assert!(err < 5e-3, "{name}：1 周期後の位置のずれ {err:e}");
+            assert!(
+                err < 5e-3,
+                "{name}（{label}）：1 周期後の位置のずれ {err:e}"
+            );
         }
     }
 }

@@ -343,13 +343,13 @@ fn v21_sitnikov_body_oscillates_on_axis() {
 fn binary_intruder_energy_matches_requested_speed() {
     use sim::scenarios::binary_intruder;
     for speed in [0.3, 0.6, 1.0, 2.0] {
-        for impact in [0.0, 0.3, 1.0] {
+        for offset in [0.0, 0.3, 1.0] {
             for phase in [0.0, 1.0, 2.0] {
                 let target = -0.5 + speed * speed * 1.5 / 3.0;
-                let e = binary_intruder(speed, impact, phase).energy();
+                let e = binary_intruder(speed, offset, phase).energy();
                 assert!(
                     (e - target).abs() < 1e-12,
-                    "speed {speed}、impact {impact}、phase {phase}：全エネルギー {e}、期待 {target}"
+                    "speed {speed}、offset {offset}、phase {phase}：全エネルギー {e}、期待 {target}"
                 );
             }
         }
@@ -365,4 +365,51 @@ fn trojan_preset_uses_jupiter_sun_mass_ratio() {
         ((q - JUPITER_SUN_MASS_RATIO) / JUPITER_SUN_MASS_RATIO).abs() < 1e-12,
         "伴星と主星の質量の比 {q}"
     );
+}
+
+/// ページの 3 章に書いた時刻が、画面と同じ条件の計算と合う（ページの数値は、ここで測った値を丸めたもの）
+#[test]
+fn page_text_times_match_page_conditions() {
+    // 条件 f を初めて満たす時刻（step ごとに見る）
+    let first = |id: u32, f: &dyn Fn(&State) -> bool, step: f64| {
+        let mut it = page(id);
+        let mut t = 0.0;
+        while t < 500.0 {
+            t += step;
+            it.advance_to(t);
+            if f(&it.state) {
+                return t;
+            }
+        }
+        f64::NAN
+    };
+    // 蝶 I は t ≈ 130 で周期から外れる：周期ごとの、初期状態とのずれが初めて 0.1 を超える時刻
+    let mut it = page(4);
+    let start = it.state.clone();
+    let mut k = 1;
+    while k < 100 && {
+        it.advance_to(BUTTERFLY_I.period * k as f64);
+        max_position_error(&it.state, &start) <= 0.1
+    } {
+        k += 1;
+    }
+    let t = BUTTERFLY_I.period * k as f64;
+    assert!((110.0..150.0).contains(&t), "蝶 I が外れる時刻 {t}");
+    // 正三角形は t ≈ 20 で崩れる（辺の長さが 10% ずれる）
+    let t = first(8, &|s| sides(s).iter().any(|d| (d - 1.0).abs() > 0.1), 0.05);
+    assert!((15.0..25.0).contains(&t), "正三角形が崩れる時刻 {t}");
+    // オイラーの解は t ≈ 10 で崩れる（中央の天体が両端を結ぶ線から 0.1 離れる）
+    let line = |s: &State| {
+        let p = &s.positions;
+        let (u, w) = (p[2] - p[0], p[1] - p[0]);
+        u.cross(w).norm() / u.norm() > 0.1
+    };
+    let t = first(11, &line, 0.05);
+    assert!((8.0..12.0).contains(&t), "オイラーの解が崩れる時刻 {t}");
+    // 古在・リドフ：離心率が 0.9 を超えるのは t ≈ 320
+    let t = first(14, &|s| two_body_elements(s, 0, 1).0 > 0.9, 0.5);
+    assert!((280.0..360.0).contains(&t), "離心率が 0.9 を超える時刻 {t}");
+    // 入れ替わり：t ≈ 30 で天体 1・3 の連星と、去っていく天体 2 に分かれる
+    let t = first(15, &|s| binary_and_escaper(s).is_some(), 0.5);
+    assert!((25.0..35.0).contains(&t), "入れ替わりが決着する時刻 {t}");
 }

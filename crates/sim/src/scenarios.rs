@@ -263,11 +263,12 @@ pub fn kozai_lidov(inclination_deg: f64) -> State {
 pub const KOZAI_INCLINATION_DEG: f64 = 75.0;
 
 /// S-14 連星への侵入：質量 1・1 の連星（間隔 1、円軌道、z 軸の周りに `phase` ラジアン回した位置から）に、
-/// 質量 1 の天体が距離 15 から、衝突径数 `impact` で飛び込む。無限遠での相対速度は臨界速度 v_c の `speed` 倍
+/// 質量 1 の天体が x = −15 から、連星の重心を通る直線から y 方向に `offset` だけずれた直線に沿って飛び込む
+/// （`offset` は距離 15 での横のずれで、無限遠での衝突径数とは違う）。無限遠での相対速度は臨界速度 v_c の `speed` 倍
 /// （v_c は全エネルギーが 0 になる速さ。等質量では v_c² = 3/2）。
 /// 全エネルギーが、連星の結合エネルギー −1/2 と無限遠での相対運動のエネルギー (1/2)(2/3) v_inf²（換算質量 2/3）の和に
 /// 一致するよう、距離 15 での速さを、実際の位置の位置エネルギーと連星の反跳を含めて逆算する
-pub fn binary_intruder(speed: f64, impact: f64, phase: f64) -> State {
+pub fn binary_intruder(speed: f64, offset: f64, phase: f64) -> State {
     let ([p1, p2], [v1, v2]) = kepler_pair(1.0, 1.0, 1.0, 0.0);
     let reduced_mass = 2.0 / 3.0;
     let v_inf = speed * 1.5f64.sqrt();
@@ -278,7 +279,7 @@ pub fn binary_intruder(speed: f64, impact: f64, phase: f64) -> State {
             positions: vec![
                 rotate_z(p1, phase),
                 rotate_z(p2, phase),
-                Vec3::new(-15.0, impact, 0.0),
+                Vec3::new(-15.0, offset, 0.0),
             ],
             velocities: vec![
                 rotate_z(v1, phase),
@@ -303,7 +304,8 @@ pub fn binary_ionization() -> State {
 }
 
 /// S-15 シトニコフ問題：質量 0.5・0.5 の連星（a = 1、e = 0.1）の重心を通り軌道面に垂直な軸（z 軸）の上に、
-/// ごく軽い天体（質量 1e-9）を z = 1 に静止させて置く。軽い天体は軸の上を上下に振動する
+/// ごく軽い天体（質量 1e-9）を z = 1 に静止させて置く。軽い天体は軸の上を上下に振動する。
+/// 重心のずれ（z 方向に 1e-9）は運動に効かないので、入力欄の値が 1 のままになるよう、重心をそろえない
 pub fn sitnikov() -> State {
     let ([p1, p2], [v1, v2]) = kepler_pair(0.5, 0.5, 1.0, 0.1);
     State {

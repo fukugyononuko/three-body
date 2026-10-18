@@ -1,6 +1,6 @@
 // 回転座標系の変換（docs/plan.md §6：V-25）。ページを開かず、src/lib/rotating-frame.ts の関数を直接確かめる
 import { expect, test } from "@playwright/test";
-import { rotatingFrame, toFrame, type V3 } from "../../src/lib/rotating-frame";
+import { rotatingFrame, toFrame, type Body, type V3 } from "../../src/lib/rotating-frame";
 
 const close = (a: V3, b: V3) => a.forEach((v, k) => expect(v).toBeCloseTo(b[k], 12));
 const dot = (a: V3, b: V3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -55,4 +55,28 @@ test("V-25：角運動量が 0（正面からぶつかる向き）でも、軸�
     expect(dot(x, r)).toBeCloseTo(Math.hypot(...r), 12);
   }
   expect(rotatingFrame({ m: 1, p: [1, 1, 1], v: [0, 0, 0] }, { m: 2, p: [1, 1, 1], v: [1, 0, 0] })).toBeNull();
+});
+
+test("V-25：rotatingFrame は null か、有限で正規直交な軸を返す（極小・極大の間隔、あふれる速度、NaN）", () => {
+  const cases: [string, Body, Body][] = [
+    ["間隔 Number.MIN_VALUE", { m: 1, p: [0, 0, 0], v: [0, 1, 0] }, { m: 1, p: [Number.MIN_VALUE, 0, 0], v: [0, -1, 0] }],
+    ["間隔 1e-300", { m: 1, p: [0, 0, 0], v: [0, 1, 0] }, { m: 1, p: [1e-300, 0, 0], v: [0, -1, 0] }],
+    ["差があふれる座標", { m: 1, p: [-1e308, 0, 0], v: [0, 1, 0] }, { m: 1, p: [1e308, 0, 0], v: [0, -1, 0] }],
+    ["外積があふれる速度", { m: 1, p: [0, 0, 0], v: [0, 1e300, 1e300] }, { m: 1, p: [1e10, 0, 0], v: [0, -1e300, 0] }],
+    ["質量が NaN", { m: NaN, p: [0, 0, 0], v: [0, 1, 0] }, { m: 1, p: [1, 0, 0], v: [0, -1, 0] }],
+    ["ふつうの入力", { m: 1, p: [0, 0, 0], v: [0, 1, 0] }, { m: 1, p: [1, 0, 0], v: [0, -1, 0] }],
+  ];
+  for (const [name, primary, secondary] of cases) {
+    const frame = rotatingFrame(primary, secondary);
+    if (!frame) continue;
+    const values = [...frame.origin, ...frame.axes.flat(), frame.separation, frame.mu];
+    expect(values.every(Number.isFinite), `${name}：${values}`).toBe(true);
+    const [x, y, z] = frame.axes;
+    for (const [a, b, expected] of [[x, x, 1], [y, y, 1], [z, z, 1], [x, y, 0], [y, z, 0], [z, x, 0]] as [V3, V3, number][]) {
+      expect(dot(a, b), name).toBeCloseTo(expected, 12);
+    }
+    expect(Math.sign(x[0]), `${name}：x′ は主星から伴星への向き`).toBe(1);
+  }
+  // ふつうの入力では null にならない
+  expect(rotatingFrame(cases[5][1], cases[5][2])).not.toBeNull();
 });

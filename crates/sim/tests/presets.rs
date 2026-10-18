@@ -635,3 +635,43 @@ fn v24_displaced_trojans_librate_around_l4() {
         crossings.len()
     );
 }
+
+/// V-23 L1〜L3 は、どの μ（0 < μ < 1）でも、表せる精度の根になっている：返した点の両隣の浮動小数点数で、
+/// x 軸の上の有効ポテンシャルの勾配の符号が変わる（勾配が 0 ちょうどでもよい）。
+/// μ が小さいと L1・L2 は伴星から (μ/3)^(1/3) ほどしか離れないので、探索の区間を天体から決まった幅だけ離すと解を外す
+#[test]
+fn v23_collinear_points_are_roots_at_float_resolution() {
+    for mu in [
+        1e-40,
+        1e-20,
+        1e-12,
+        1e-9,
+        JUPITER_MU,
+        0.3,
+        0.5,
+        0.9,
+        1.0 - 1e-9,
+        1.0 - 1e-12,
+    ] {
+        let (x1, x2) = (-mu, 1.0 - mu);
+        let force = |x: f64| {
+            let (d1, d2) = (x - x1, x - x2);
+            x - (1.0 - mu) * d1 / d1.abs().powi(3) - mu * d2 / d2.abs().powi(3)
+        };
+        let [l1, l2, l3, ..] = lagrange_points(mu);
+        for (k, x) in [l1.x, l2.x, l3.x].into_iter().enumerate() {
+            let (below, at, above) = (force(x.next_down()), force(x), force(x.next_up()));
+            assert!(
+                at == 0.0 || below.signum() != above.signum(),
+                "μ = {mu}：L{} = {x} の両隣の勾配 {below}、{above}",
+                k + 1
+            );
+        }
+        assert!(
+            l3.x < x1 && x1 < l1.x && l1.x < x2 && x2 < l2.x,
+            "μ = {mu}：L1〜L3 の並び"
+        );
+    }
+    // μ が NaN でも止まる（値は NaN でよい）
+    let _ = lagrange_points(f64::NAN);
+}

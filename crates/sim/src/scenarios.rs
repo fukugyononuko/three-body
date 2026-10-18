@@ -221,7 +221,8 @@ pub const HORSESHOE_ANGLE_DEG: f64 = 115.0;
 
 /// 円制限三体問題のラグランジュ点 L1〜L5。主星（質量の割合 1 − μ）と伴星（μ）の間隔を 1、
 /// 2 天体の重心を原点、伴星を +x 軸の上（主星は −μ、伴星は 1 − μ）、公転の向きを +z とした回転座標系での位置。
-/// L1（2 天体のあいだ）・L2（伴星の外側）・L3（主星の外側）は、x 軸の上で有効ポテンシャルの勾配が 0 になる点を二分法で求める。
+/// L1（2 天体のあいだ）・L2（伴星の外側）・L3（主星の外側）は、x 軸の上で有効ポテンシャルの勾配が 0 になる点を、
+/// 浮動小数点数で表せる精度まで二分法で求める。
 /// L4・L5 は 2 天体と正三角形をなす点（L4 が公転の向きに伴星の前）
 pub fn lagrange_points(mu: f64) -> [Vec3; 5] {
     let (x1, x2) = (-mu, 1.0 - mu);
@@ -230,25 +231,35 @@ pub fn lagrange_points(mu: f64) -> [Vec3; 5] {
         let (d1, d2) = (x - x1, x - x2);
         x - (1.0 - mu) * d1 / d1.abs().powi(3) - mu * d2 / d2.abs().powi(3)
     };
-    // 各区間で force は単調で、両端の符号が異なる
+    // 区間 (lo, hi) の根。3 つの区間とも、force は lo の側で負、hi の側で正になる
+    // （L1：主星の右で −∞、伴星の左で +∞。L2：伴星の右で −∞、遠くで +∞。L3：遠くで −∞、主星の左で +∞）。
+    // 端は天体の位置そのものにして、force を端で計算せずに、両端が隣り合う浮動小数点数になるまで二分する。
+    // 天体から決まった幅だけ離した区間では、μ が小さいとき（L1・L2 は伴星から (μ/3)^(1/3)）に解を外す
+    // 最後は、勾配の小さいほうの端を返す（端が天体の位置のままなら勾配は NaN なので、そちらは選ばない）。
+    // μ が NaN でも止まるよう、回数に上限を設ける（幅 3 の区間を、非正規化数の刻みまで半分にしても足りる回数）
+    let size = |x: f64| {
+        let f = force(x).abs();
+        if f.is_nan() { f64::INFINITY } else { f }
+    };
     let root = |mut lo: f64, mut hi: f64| {
-        let rising = force(hi) > force(lo);
-        for _ in 0..200 {
+        for _ in 0..2200 {
             let mid = 0.5 * (lo + hi);
-            if (force(mid) > 0.0) == rising {
+            if mid <= lo || mid >= hi {
+                break;
+            }
+            if force(mid) > 0.0 {
                 hi = mid;
             } else {
                 lo = mid;
             }
         }
-        0.5 * (lo + hi)
+        if size(hi) < size(lo) { hi } else { lo }
     };
-    let eps = 1e-12;
     let h = 3f64.sqrt() / 2.0;
     [
-        Vec3::new(root(x1 + eps, x2 - eps), 0.0, 0.0),
-        Vec3::new(root(x2 + eps, x2 + 2.0), 0.0, 0.0),
-        Vec3::new(root(x1 - 2.0, x1 - eps), 0.0, 0.0),
+        Vec3::new(root(x1, x2), 0.0, 0.0),
+        Vec3::new(root(x2, x2 + 2.0), 0.0, 0.0),
+        Vec3::new(root(x1 - 2.0, x1), 0.0, 0.0),
         Vec3::new(0.5 - mu, h, 0.0),
         Vec3::new(0.5 - mu, -h, 0.0),
     ]

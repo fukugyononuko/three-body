@@ -282,17 +282,17 @@ function apply(): void {
   if (!matchMedia("(prefers-reduced-motion: reduce)").matches) setPlaying(true);
 }
 
-/** 表示の範囲を、天体のいまの位置が入るように広げる（all のときは、軌跡のすべての点が入るように決め直す） */
+/** 表示の範囲を、天体のいまの位置が入るように広げる（all のときは、軌跡のすべての点が入るように決め直す）。
+ * 回転座標系では、ラグランジュ点 L1〜L5 の印も入るようにする */
 function fitView(all = false): void {
   let need = all ? 0 : view.half;
-  for (const trail of trails) for (const body of trail) {
-    for (const point of all ? body : body.slice(-1)) {
-      const p = shown(point);
-      if (!isFinitePoint(p)) continue;
-      need = Math.max(need, ...p.map((v) => Math.abs(v) * 1.15));
-    }
+  const points = trails.flatMap((trail) => trail.flatMap((body) => (all ? body : body.slice(-1)).map(shown)));
+  for (const p of [...points, ...lagrangeMarks()]) {
+    if (!isFinitePoint(p)) continue;
+    need = Math.max(need, ...p.map((v) => Math.abs(v) * 1.15));
   }
   view.half = Math.max(need, 0.5);
+  orbits.dataset.viewHalf = String(view.half); // e2e テストで表示の範囲を確かめるため
 }
 
 // ---- 4 面図 ----

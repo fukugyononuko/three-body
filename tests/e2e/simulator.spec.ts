@@ -329,3 +329,25 @@ test("回転座標系：座標系が決まらないとき（主星と伴星の�
   await page.uncheck("#rotating");
   expect(await colored()).toBeGreaterThan(0);
 });
+
+test("回転座標系：表示の範囲に L1〜L5 がすべて入る（回転座標系で始めるときも、あとで切り替えるときも）", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" }); // 自動で再生しない（初期状態の範囲を見る）
+  await ready(page);
+  await page.click("#remove-body");
+  // 質量 1・1、間隔 1 の円軌道（ω² = 2）。μ = 0.5 の L2・L3 は |x′| ≈ 1.1984、L4・L5 は |y′| ≈ 0.866
+  const v = Math.sqrt(2) / 2;
+  await setInitial(page, [
+    [1, -0.5, 0, 0, 0, -v, 0],
+    [1, 0.5, 0, 0, 0, v, 0],
+  ]);
+  const half = async () => Number(await page.locator("#orbits").getAttribute("data-view-half"));
+  const farthest = 1.1984;
+  await page.check("#rotating");
+  await page.click("#apply");
+  expect(await half()).toBeGreaterThanOrEqual(farthest);
+  await page.uncheck("#rotating");
+  await page.click("#apply");
+  expect(await half()).toBeLessThan(farthest); // 静止座標系では天体だけから決める
+  await page.check("#rotating");
+  expect(await half()).toBeGreaterThanOrEqual(farthest);
+});

@@ -60,8 +60,10 @@ const description = "天体が重力で引き合う三体問題（N 体問題）
               </optgroup>
               <optgroup label="ラグランジュ点とオイラーの解">
                 <option value="8">ラグランジュの正三角形の解（等質量）</option>
-                <option value="9">太陽・木星・トロヤ群（L4）</option>
-                <option value="10">重い伴星と L4（不安定）</option>
+                <option value="9" data-rotating>太陽・木星・トロヤ群（L4）</option>
+                <option value="18" data-rotating data-speed="10" data-trail="Infinity">トロヤ群のオタマジャクシ軌道</option>
+                <option value="19" data-rotating data-speed="10" data-trail="Infinity">トロヤ群の馬蹄形軌道</option>
+                <option value="10" data-rotating data-speed="10" data-trail="Infinity">重い伴星と L4（不安定）</option>
                 <option value="11">オイラーの一直線の解</option>
               </optgroup>
               <optgroup label="惑星">
@@ -134,6 +136,14 @@ const description = "天体が重力で引き合う三体問題（N 体問題）
             <label>Δz<input id="chaos-dz" type="number" step="any" value="0" /></label>
           </div>
         </fieldset>
+        <fieldset>
+          <legend>座標系</legend>
+          <label class="check"><input id="rotating" type="checkbox" /> 回転座標系で描く（主星と伴星を結ぶ線を止める）</label>
+          <div class="controls" data-rotating-fields hidden>
+            <label>主星<select id="primary"></select></label>
+            <label>伴星<select id="secondary"></select></label>
+          </div>
+        </fieldset>
         <div class="controls">
           <button id="apply" type="button" disabled>この初期値で始める</button>
           <button id="play" type="button" aria-pressed="false" disabled>再生</button>
@@ -150,6 +160,8 @@ const description = "天体が重力で引き合う三体問題（N 体問題）
             図 1　天体の軌道の 4 面図。左上：立体図（ドラッグか、図を選んで矢印キーで回転）、右上：xy 平面、左下：xz 平面、右下：yz 平面への投影。
             原点は重心で、天体が離れると表示の範囲を広げる。天体の色と番号は、初期値の表の天体に対応する。円の大きさは質量に応じる。
             軌跡は「軌跡の長さ」で選んだ時間だけ残し、古い部分ほど薄く描く（「すべて残す」では、天体 1 つあたり最新の 20,000 点まで）。
+            回転座標系では、原点を主星と伴星の重心に、x′ 軸を主星から伴星への向きに、z′ 軸を 2 天体の公転の軸の向きにとり、ラグランジュ点 L1〜L5 に＋の印をつける（立体図と x′y′ 面だけ）。
+            座標系を切り替えても軌跡は消えない。主星か伴星を選び直すと、軌跡はそこから描き直す。
             <ul class="legend">
               <li data-chaos-legend hidden><span class="swatch dashed sm"></span>破線：初期値をずらした計算</li>
             </ul>
@@ -211,6 +223,11 @@ const description = "天体が重力で引き合う三体問題（N 体問題）
         <p><strong>リープフロッグ法（速度ベルレ法、2 次、シンプレクティック）</strong>　加速度を <Fragment set:html={tex(String.raw`\mathbf a(\mathbf r)`)} /> として、</p>
         <Fragment set:html={tex(String.raw`\mathbf v_{n+1/2} = \mathbf v_n + \tfrac{h}{2} \mathbf a(\mathbf r_n), \qquad \mathbf r_{n+1} = \mathbf r_n + h\, \mathbf v_{n+1/2}, \qquad \mathbf v_{n+1} = \mathbf v_{n+1/2} + \tfrac{h}{2} \mathbf a(\mathbf r_{n+1})`, true)} />
         <p>全角運動量を厳密に保ち、全エネルギーの誤差は長時間でも増え続けません。</p>
+        <h3>回転座標系</h3>
+        <p>主星と伴星を選ぶと、2 天体の重心を原点とし、主星から伴星への向きを x′ 軸、2 天体の相対運動の角運動量の向きを z′ 軸とする座標系で描ける。
+          2 天体が円軌道を回るとき、この座標系では 2 天体が止まって見え、ほかの天体が止まっていられる点がラグランジュ点 L1〜L5 になる。
+          L1〜L3 は 2 天体を結ぶ直線の上で、重力と遠心力がつり合う点として数値的に求め、L4・L5 は 2 天体と正三角形をなす点。
+          印の位置は、いまの 2 天体の間隔から決める（2 天体の軌道が円でないときは、目安になる）。</p>
         <h3>プリセット</h3>
         <ul>
           <li><strong>8 の字の解</strong>：同じ質量の 3 天体が、1 本の 8 の字の上を追いかけ合う周期解（周期 約 6.326）。初期値は広く使われている数値を用いた。</li>
@@ -230,8 +247,10 @@ const description = "天体が重力で引き合う三体問題（N 体問題）
           1 つの質量が無視できるときは、伴星の質量の割合 μ が約 0.0385 未満のとき。</p>
         <ul>
           <li><strong>ラグランジュの正三角形の解（等質量）</strong>：質量 1 の 3 天体が辺 1 の正三角形のまま回る。等質量は上の条件を満たさないので、計算の丸め誤差だけで t ≈ 20 で崩れる。</li>
-          <li><strong>太陽・木星・トロヤ群（L4）</strong>：主星と伴星（質量の割合 μ = 9.537 × 10⁻⁴。伴星と主星の質量の比が、木星と太陽の比 9.546 × 10⁻⁴ になる）が間隔 1 の円軌道を回り、両者と正三角形をなす点 L4 に、ごく軽い天体（質量 10⁻⁹）を置く。μ が小さいので L4 にとどまる。図は回転しない座標で描くので、L4 の天体は伴星の 60° 前を同じ円の上で回って見える。</li>
-          <li><strong>重い伴星と L4（不安定）</strong>：上と同じ配置で μ = 0.05 にしたもの。条件を超えるので、L4 の天体は離れていく。</li>
+          <li><strong>太陽・木星・トロヤ群（L4）</strong>：主星と伴星（質量の割合 μ = 9.537 × 10⁻⁴。伴星と主星の質量の比が、木星と太陽の比 9.546 × 10⁻⁴ になる）が間隔 1 の円軌道を回り、両者と正三角形をなす点 L4 に、ごく軽い天体（質量 10⁻⁹）を置く。μ が小さいので L4 にとどまる。回転座標系で始めるので、L4 の天体は L4 の印の上に止まって見える（座標系を切り替えると、伴星の 60° 前を同じ円の上で回って見える）。</li>
+          <li><strong>トロヤ群のオタマジャクシ軌道</strong>：上の L4 の天体を、主星と伴星の重心の周りに 20° 前へ回した位置に、2 天体と同じ角速度で置く。回転座標系での角度（2 天体の重心から見て、伴星の向きから公転の向きに測る。L4 は約 60°）が 44°〜80° のあいだを周期 約 80 で揺れ、軌跡は L4 を囲むオタマジャクシの形になる。</li>
+          <li><strong>トロヤ群の馬蹄形軌道</strong>：同じく 115° 回した位置（L3 の近く）から始める。角度が 23°〜337° を往復し、L4・L3・L5 をまたぐ馬蹄形を描く。伴星に近づくたびに押し返され、伴星の位置（0°）は越えない。</li>
+          <li><strong>重い伴星と L4（不安定）</strong>：L4 の配置で μ = 0.05 にしたもの。条件を超えるので、L4 の天体は L4 の印から離れていく。</li>
           <li><strong>オイラーの一直線の解</strong>：質量 1 の 3 天体が間隔 1 で一直線に並んで回る。不安定で、中央の天体を 10⁻⁹ ずらしただけで t ≈ 10 で崩れる。</li>
         </ul>
         <p><strong>惑星</strong></p>

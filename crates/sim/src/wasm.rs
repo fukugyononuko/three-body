@@ -16,11 +16,13 @@ struct Slot {
     sim: Option<Integrator>,
     /// 天体ごとの x, y, z（長さは固定なので、アドレスは変わらない）
     out: [f64; MAX_BODIES * 3],
+    /// 天体ごとの vx, vy, vz
+    vout: [f64; MAX_BODIES * 3],
 }
 
 thread_local! {
     static SLOTS_CELL: RefCell<Vec<Slot>> =
-        RefCell::new((0..SLOTS).map(|_| Slot { sim: None, out: [0.0; MAX_BODIES * 3] }).collect());
+        RefCell::new((0..SLOTS).map(|_| Slot { sim: None, out: [0.0; MAX_BODIES * 3], vout: [0.0; MAX_BODIES * 3] }).collect());
     static INPUT: RefCell<[f64; MAX_BODIES * FIELDS]> = const { RefCell::new([0.0; MAX_BODIES * FIELDS]) };
 }
 
@@ -42,7 +44,7 @@ pub extern "C" fn sim_input() -> *mut f64 {
 
 /// 有名シナリオの初期値を、入力用の配列に書き出し、天体の数を返す（失敗したら 0）。
 /// 番号と内容の対応は scenarios::by_id（0〜3 は 8 の字の解、ピタゴラス、8 の字＋垂直の速度、傾いた連星＋第 3 天体。
-/// 4〜17 は研究済みの周期解、ラグランジュの解、惑星、連星への侵入、シトニコフ問題）
+/// 4〜19 は研究済みの周期解、ラグランジュの解、惑星、連星への侵入、シトニコフ問題、L4 からずらしたトロヤ群）
 #[unsafe(no_mangle)]
 pub extern "C" fn sim_load_preset(scenario: u32) -> u32 {
     let Some(state) = scenarios::by_id(scenario) else {
@@ -177,13 +179,37 @@ pub extern "C" fn sim_com(slot: u32, component: u32) -> f64 {
 pub extern "C" fn sim_positions(slot: u32) -> *const f64 {
     with_slot(slot, |s| {
         if let Some(sim) = s.sim.as_ref() {
-            for (i, p) in sim.state.positions.iter().enumerate().take(MAX_BODIES) {
-                s.out[3 * i] = p.x;
-                s.out[3 * i + 1] = p.y;
-                s.out[3 * i + 2] = p.z;
-            }
+            write_vectors(&mut s.out, &sim.state.positions);
         }
         s.out.as_ptr()
     })
     .unwrap_or(std::ptr::null())
+}
+
+/// 速度（天体ごとの vx, vy, vz）を書き出した配列のアドレス（回転座標系の向きを決めるのに使う）
+#[unsafe(no_mangle)]
+pub extern "C" fn sim_velocities(slot: u32) -> *const f64 {
+    with_slot(slot, |s| {
+        if let Some(sim) = s.sim.as_ref() {
+            write_vectors(&mut s.vout, &sim.state.velocities);
+        }
+        s.vout.as_ptr()
+    })
+    .unwrap_or(std::ptr::null())
+}
+
+fn write_vectors(out: &mut [f64; MAX_BODIES * 3], vectors: &[Vec3]) {
+    for (i, p) in vectors.iter().enumerate().take(MAX_BODIES) {
+        out[3 * i] = p.x;
+        out[3 * i + 1] = p.y;
+        out[3 * i + 2] = p.z;
+    }
+}
+
+/// ラグランジュ点 L(k+1)（k = 0〜4）の成分（scenarios::lagrange_points。主星と伴星の間隔を 1 とした回転座標系）
+#[unsafe(no_mangle)]
+pub extern "C" fn sim_lagrange(mu: f64, k: u32, component: u32) -> f64 {
+    scenarios::lagrange_points(mu)
+        .get(k as usize)
+        .map_or(f64::NAN, |p| axis(*p, component))
 }

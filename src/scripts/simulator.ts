@@ -1,5 +1,8 @@
 // 図 1（4 面図のシミュレーター）と図 2（全エネルギーの相対誤差）。計算はすべて WebAssembly（crates/sim）で行う（C-03）。
 // 天体の数（2〜8）と、各天体の質量・位置・速度（3 次元）を利用者が入力できる。有名シナリオは入力欄に値を入れるプリセット（S-05）。
+// 図 1 は、静止座標系（原点は重心）と、主星と伴星を結ぶ線が止まって見える回転座標系を切り替えて描ける。
+
+import { rotatingFrame, toFrame, type Frame, type V3 } from "../lib/rotating-frame";
 
 interface SimExports {
   memory: WebAssembly.Memory;
@@ -16,11 +19,14 @@ interface SimExports {
   sim_dt(slot: number): number;
   sim_com(slot: number, component: number): number;
   sim_positions(slot: number): number;
+  sim_velocities(slot: number): number;
+  sim_lagrange(mu: number, k: number, component: number): number;
 }
 
-type V3 = [number, number, number];
-/** 軌跡の点：重心を引いた位置と、その時刻 */
-type TrailPoint = [number, number, number, number];
+/** 軌跡の点：重心を引いた位置、その時刻、回転座標系での位置 */
+type TrailPoint = [number, number, number, number, number, number, number];
+/** 軌跡の点のうち、回転座標系での位置が始まる番号 */
+const ROTATING = 4;
 const FIELDS = ["m", "x", "y", "z", "vx", "vy", "vz"] as const;
 const FIELD_LABELS: Record<(typeof FIELDS)[number], string> = { m: "質量", x: "位置 x", y: "位置 y", z: "位置 z", vx: "速度 vx", vy: "速度 vy", vz: "速度 vz" };
 /** 軌跡を「すべて残す」ときの、天体 1 つあたりの点の上限（描画の速さのため） */
@@ -38,6 +44,7 @@ const INIT_ERRORS: Record<number, string> = {
   4: "2 つの天体が同じ位置にあります。位置をずらしてください。",
 };
 const DEFAULT_VIEW = { az: -0.6, el: 0.45 };
+const FRAME_ERROR = "いまは回転座標系を決められません（主星と伴星が重なっているか、値が大きすぎます）。静止座標系に切り替えると表示できます。";
 
 const $ = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
 const root = $<HTMLElement>("[data-simulator]");
@@ -52,6 +59,9 @@ const trailSelect = $<HTMLSelectElement>("#trail");
 const chaosToggle = $<HTMLInputElement>("#chaos");
 const chaosBody = $<HTMLSelectElement>("#chaos-body");
 const chaosDelta = (axis: "x" | "y" | "z") => $<HTMLInputElement>(`#chaos-d${axis}`);
+const rotatingToggle = $<HTMLInputElement>("#rotating");
+const primarySelect = $<HTMLSelectElement>("#primary");
+const secondarySelect = $<HTMLSelectElement>("#secondary");
 const playButton = $<HTMLButtonElement>("#play");
 const applyButton = $<HTMLButtonElement>("#apply");
 const addBodyButton = $<HTMLButtonElement>("#add-body");
@@ -79,6 +89,8 @@ let trails: TrailPoint[][][] = [];
 let e0: number[] = [];
 let l0: V3[] = [];
 let masses: number[] = [];
+/** 回転座標系の主星と伴星（天体の番号、0 から） */
+let pair: [number, number] = [0, 1];
 let view = { ...DEFAULT_VIEW, half: 1.5, zoom: 1 };
 let energySeries: { label: string; color: number; dashed: boolean; points: [number, number][] }[] = [];
 
@@ -113,14 +125,20 @@ function renderRows(n: number): void {
   bodies = n;
   addBodyButton.disabled = n >= maxBodies;
   removeBodyButton.disabled = n <= 2;
-  chaosBody.replaceChildren(
-    ...Array.from({ length: n }, (_, b) => {
+  const bodyOptions = () =>
+    Array.from({ length: n }, (_, b) => {
       const o = document.createElement("option");
       o.value = String(b);
       o.textContent = `天体 ${b + 1}`;
       return o;
-    }),
-  );
+    });
+  chaosBody.replaceChildren(...bodyOptions());
+  // 主星と伴星は、選んでいた天体が残っていればそのまま、なければ天体 1・2 にする
+  if (!pair.every((b) => b < n)) pair = [0, 1];
+  primarySelect.replaceChildren(...bodyOptions());
+  secondarySelect.replaceChildren(...bodyOptions());
+  primarySelect.value = String(pair[0]);
+  secondarySelect.value = String(pair[1]);
 }
 
 function readTable(): string[][] {
@@ -150,13 +168,26 @@ function loadPreset(): void {
     }),
   );
   dtInput.value = String(wasm.sim_preset_dt(id));
+  // L4 の周りの揺れを見せるプリセットは、天体 1・2 を主星・伴星とする回転座標系で始める
+  const option = presetSelect.selectedOptions[0];
+  rotatingToggle.checked = option.hasAttribute("data-rotating");
+  if (rotatingToggle.checked) {
+    pair = [0, 1];
+    primarySelect.value = "0";
+    secondarySelect.value = "1";
+  }
+  // 揺れがゆっくりなプリセットは、速く再生し、軌跡をすべて残して形を見せる
+  if (option.dataset.speed) speedSelect.value = option.dataset.speed;
+  if (option.dataset.trail) trailSelect.value = option.dataset.trail;
+  syncRotatingFields();
 }
 
 // ---- 計算 ----
-function positions(slot: number): V3[] {
-  const raw = new Float64Array(wasm.memory.buffer, wasm.sim_positions(slot), bodies * 3);
+function vectors(address: number): V3[] {
+  const raw = new Float64Array(wasm.memory.buffer, address, bodies * 3);
   return Array.from({ length: bodies }, (_, i): V3 => [raw[3 * i], raw[3 * i + 1], raw[3 * i + 2]]);
 }
+const positions = (slot: number) => vectors(wasm.sim_positions(slot));
 const com = (slot: number): V3 => [0, 1, 2].map((k) => wasm.sim_com(slot, k)) as V3;
 const angular = (slot: number): V3 => [0, 1, 2].map((k) => wasm.sim_angular_momentum(slot, k)) as V3;
 
@@ -181,9 +212,38 @@ function perturbed(values: number[]): number[] {
   return copy;
 }
 
-function relativePositions(slot: number): V3[] {
+/** いまの回転座標系（本計算の主星と伴星から決める。カオスの破線の計算も同じ座標系で描く） */
+function currentFrame(): Frame | null {
+  const p = positions(MAIN);
+  const v = vectors(wasm.sim_velocities(MAIN));
+  const body = (b: number) => ({ m: masses[b], p: p[b], v: v[b] });
+  return rotatingFrame(body(pair[0]), body(pair[1]));
+}
+
+/** 各天体の、重心を引いた位置と、回転座標系での位置。座標系が決まらないとき（2 天体が重なる、値があふれる）は、
+ * 回転座標系での位置を NaN にする（ほかの座標系の位置で代えると、回転座標系の軌跡に混ざる）。NaN の点は描かない */
+function sample(slot: number, frame: Frame | null): [V3, V3][] {
   const c = com(MAIN);
-  return positions(slot).map(([x, y, z]): V3 => [x - c[0], y - c[1], z - c[2]]);
+  return positions(slot).map((p): [V3, V3] => {
+    const relative: V3 = [p[0] - c[0], p[1] - c[1], p[2] - c[2]];
+    return [relative, frame ? toFrame(frame, p) : [NaN, NaN, NaN]];
+  });
+}
+
+const isFinitePoint = (p: V3) => p.every(Number.isFinite);
+
+const trailPoint = ([relative, rotated]: [V3, V3], t: number): TrailPoint => [...relative, t, ...rotated];
+
+/** いま表示している座標系での、軌跡の点の位置 */
+const shown = (point: TrailPoint): V3 => {
+  const k = rotatingToggle.checked ? ROTATING : 0;
+  return [point[k], point[k + 1], point[k + 2]];
+};
+
+/** 軌跡を、いまの位置の 1 点から描き直す */
+function restartTrails(): void {
+  const frame = currentFrame();
+  trails = slots.map((s) => sample(s, frame).map((b): TrailPoint[] => [trailPoint(b, simTime)]));
 }
 
 function apply(): void {
@@ -205,7 +265,7 @@ function apply(): void {
   }
   simTime = 0;
   lastSample = -Infinity;
-  trails = slots.map((s) => relativePositions(s).map((p): TrailPoint[] => [[...p, 0]]));
+  restartTrails();
   view.half = 0;
   fitView();
   energySeries = slots.map((_, k) => ({
@@ -222,13 +282,17 @@ function apply(): void {
   if (!matchMedia("(prefers-reduced-motion: reduce)").matches) setPlaying(true);
 }
 
-function fitView(): void {
-  let need = view.half;
-  for (const trail of trails) for (const body of trail) {
-    const [x, y, z] = body[body.length - 1];
-    need = Math.max(need, Math.abs(x) * 1.15, Math.abs(y) * 1.15, Math.abs(z) * 1.15);
+/** 表示の範囲を、天体のいまの位置が入るように広げる（all のときは、軌跡のすべての点が入るように決め直す）。
+ * 回転座標系では、ラグランジュ点 L1〜L5 の印も入るようにする */
+function fitView(all = false): void {
+  let need = all ? 0 : view.half;
+  const points = trails.flatMap((trail) => trail.flatMap((body) => (all ? body : body.slice(-1)).map(shown)));
+  for (const p of [...points, ...lagrangeMarks()]) {
+    if (!isFinitePoint(p)) continue;
+    need = Math.max(need, ...p.map((v) => Math.abs(v) * 1.15));
   }
   view.half = Math.max(need, 0.5);
+  orbits.dataset.viewHalf = String(view.half); // e2e テストで表示の範囲を確かめるため
 }
 
 // ---- 4 面図 ----
@@ -240,6 +304,8 @@ interface Panel {
   title: string;
   project: (p: V3) => [number, number];
   axes: [string, V3][];
+  /** ラグランジュ点の印を描くか（印は z′ = 0 の面にあるので、横から見る 2 面では軸と重なる） */
+  lagrange: boolean;
 }
 
 function rotate([x, y, z]: V3): [number, number] {
@@ -252,11 +318,13 @@ function rotate([x, y, z]: V3): [number, number] {
 function panels(): Panel[] {
   const w = orbits.width / 2;
   const h = orbits.height / 2;
+  // 回転座標系の軸には ′ をつける
+  const [x, y, z] = ["x", "y", "z"].map((a) => (rotatingToggle.checked ? `${a}′` : a));
   return [
-    { x: 0, y: 0, w, h, title: "3D（ドラッグで回転）", project: rotate, axes: [["x", [1, 0, 0]], ["y", [0, 1, 0]], ["z", [0, 0, 1]]] },
-    { x: w, y: 0, w, h, title: "xy", project: ([x, y]) => [x, y], axes: [["x", [1, 0, 0]], ["y", [0, 1, 0]]] },
-    { x: 0, y: h, w, h, title: "xz", project: ([x, , z]) => [x, z], axes: [["x", [1, 0, 0]], ["z", [0, 0, 1]]] },
-    { x: w, y: h, w, h, title: "yz", project: ([, y, z]) => [y, z], axes: [["y", [0, 1, 0]], ["z", [0, 0, 1]]] },
+    { x: 0, y: 0, w, h, title: "3D（ドラッグで回転）", project: rotate, axes: [[x, [1, 0, 0]], [y, [0, 1, 0]], [z, [0, 0, 1]]], lagrange: true },
+    { x: w, y: 0, w, h, title: x + y, project: ([u, v]) => [u, v], axes: [[x, [1, 0, 0]], [y, [0, 1, 0]]], lagrange: true },
+    { x: 0, y: h, w, h, title: x + z, project: ([u, , v]) => [u, v], axes: [[x, [1, 0, 0]], [z, [0, 0, 1]]], lagrange: false },
+    { x: w, y: h, w, h, title: y + z, project: ([, u, v]) => [u, v], axes: [[y, [0, 1, 0]], [z, [0, 0, 1]]], lagrange: false },
   ];
 }
 
@@ -265,7 +333,12 @@ function drawOrbits(): void {
   g.fillStyle = css("--paper");
   g.fillRect(0, 0, orbits.width, orbits.height);
   const half = view.half / view.zoom;
-  const current = slots.map((s) => relativePositions(s));
+  const current = trails.map((trail) => trail.map((body) => shown(body[body.length - 1])));
+  const marks = lagrangeMarks();
+  // 回転座標系がいま決まらないときは、理由を表示する（決まったら消す）
+  const undetermined = rotatingToggle.checked && current.length > 0 && !current[0].every(isFinitePoint);
+  if (undetermined) message.textContent = FRAME_ERROR;
+  else if (message.textContent === FRAME_ERROR) message.textContent = "";
   for (const panel of panels()) {
     const scale = Math.min(panel.w, panel.h) / (2 * half);
     const cx = panel.x + panel.w / 2;
@@ -291,6 +364,20 @@ function drawOrbits(): void {
       g.font = `18px ${css("--font-body")}`;
       g.fillText(name, ex + 4, ey - 4);
     }
+    // ラグランジュ点（回転座標系のときだけ）
+    g.strokeStyle = css("--muted");
+    g.fillStyle = css("--muted");
+    g.font = `16px ${css("--font-body")}`;
+    (panel.lagrange ? marks : []).forEach((p, k) => {
+      const [sx, sy] = toScreen(p);
+      g.beginPath();
+      g.moveTo(sx - 5, sy);
+      g.lineTo(sx + 5, sy);
+      g.moveTo(sx, sy - 5);
+      g.lineTo(sx, sy + 5);
+      g.stroke();
+      g.fillText(`L${k + 1}`, sx + 6, sy + 16);
+    });
     // 1. 軌跡（全天体の線を先に描き、点がその上に来るようにする）。古い部分ほど薄く描く（「すべて残す」のときは薄くしない）
     const trailLength = Number(trailSelect.value);
     const fade = Number.isFinite(trailLength) && trailLength > 0;
@@ -309,10 +396,18 @@ function drawOrbits(): void {
           if (to <= from) continue;
           g.globalAlpha = fade ? 0.15 + (0.85 * (band + 1)) / bands : 1;
           g.beginPath();
+          // 描けない点（NaN）では線を切る
+          let penDown = false;
           for (let k = from; k <= to; k++) {
-            const [sx, sy] = toScreen(points[k] as unknown as V3);
-            if (k === from) g.moveTo(sx, sy);
-            else g.lineTo(sx, sy);
+            const p = shown(points[k]);
+            if (!isFinitePoint(p)) {
+              penDown = false;
+              continue;
+            }
+            const [sx, sy] = toScreen(p);
+            if (penDown) g.lineTo(sx, sy);
+            else g.moveTo(sx, sy);
+            penDown = true;
           }
           g.stroke();
         }
@@ -323,6 +418,7 @@ function drawOrbits(): void {
     // 2. 天体の現在の位置（すべての線の上に描く）
     slots.forEach((_, s) => {
       for (let i = 0; i < bodies; i++) {
+        if (!isFinitePoint(current[s][i])) continue;
         const [sx, sy] = toScreen(current[s][i]);
         g.fillStyle = colorOf(i);
         g.strokeStyle = css("--paper");
@@ -339,6 +435,7 @@ function drawOrbits(): void {
     g.fillStyle = css("--text");
     g.font = `16px ${css("--font-body")}`;
     for (let i = 0; i < bodies; i++) {
+      if (!isFinitePoint(current[0][i])) continue;
       const [sx, sy] = toScreen(current[0][i]);
       g.fillText(String(i + 1), sx + 8, sy - 6);
     }
@@ -357,7 +454,19 @@ function drawOrbits(): void {
   g.stroke();
   g.fillStyle = css("--muted");
   g.font = `16px ${css("--font-body")}`;
-  g.fillText(`axis length = ${(half * 0.8).toPrecision(2)} (G = 1 units), origin = center of mass`, 10, orbits.height - 10);
+  const origin = rotatingToggle.checked
+    ? `rotating frame: origin = center of mass of bodies ${pair[0] + 1} and ${pair[1] + 1}, x′ toward body ${pair[1] + 1}`
+    : "origin = center of mass";
+  g.fillText(`axis length = ${(half * 0.8).toPrecision(2)} (G = 1 units), ${origin}`, 10, orbits.height - 10);
+}
+
+/** 回転座標系での L1〜L5 の位置（主星と伴星のいまの間隔で拡大する）。静止座標系のときは描かない */
+function lagrangeMarks(): V3[] {
+  if (!rotatingToggle.checked) return [];
+  const frame = currentFrame();
+  if (!frame) return [];
+  // sim_lagrange は 2 天体の重心を原点とし、間隔を 1 とした位置を返す
+  return [0, 1, 2, 3, 4].map((k) => [0, 1, 2].map((c) => wasm.sim_lagrange(frame.mu, k, c) * frame.separation) as V3);
 }
 
 function relativeEnergyError(slot: number): number {
@@ -385,12 +494,13 @@ function frame(now: number): void {
   const elapsed = Math.min((now - lastFrame) / 1000, 0.1);
   lastFrame = now;
   simTime += elapsed * Number(speedSelect.value);
+  slots.forEach((slot) => wasm.sim_advance(slot, simTime));
+  const rotation = currentFrame();
   slots.forEach((slot, s) => {
-    wasm.sim_advance(slot, simTime);
     const trailLength = Number(trailSelect.value);
-    relativePositions(slot).forEach((p, i) => {
+    sample(slot, rotation).forEach((b, i) => {
       const points = trails[s][i];
-      points.push([...p, simTime]);
+      points.push(trailPoint(b, simTime));
       // 選んだ長さ（時間）より古い点を捨てる。「すべて残す」でも点の数には上限を設ける
       let drop = 0;
       while (drop < points.length - 1 && simTime - points[drop][3] > trailLength) drop++;
@@ -577,6 +687,30 @@ function compare(): void {
   requestAnimationFrame(chunk);
 }
 
+function syncRotatingFields(): void {
+  $<HTMLElement>("[data-rotating-fields]").hidden = !rotatingToggle.checked;
+}
+
+/** 表示する座標系を切り替える。軌跡は両方の座標系で記録しているので、消さずに描き直す */
+function switchFrame(): void {
+  syncRotatingFields();
+  fitView(true);
+  drawOrbits();
+}
+
+/** 主星（which = 0）か伴星（1）を選び直す。同じ天体を選んだら、もう一方と入れ替える。
+ * 過去の速度は持たないので、軌跡はいまの位置から描き直す */
+function choosePair(which: 0 | 1): void {
+  const selects = [primarySelect, secondarySelect];
+  const chosen = Number(selects[which].value);
+  if (chosen === pair[1 - which]) selects[1 - which].value = String(pair[which]);
+  pair = [Number(primarySelect.value), Number(secondarySelect.value)];
+  if (!trails.length) return;
+  restartTrails();
+  fitView(true);
+  drawOrbits();
+}
+
 function syncMethodFields(): void {
   const rk45 = methodSelect.value === "1";
   $<HTMLElement>("[data-field=dt]").hidden = rk45;
@@ -601,6 +735,9 @@ async function main(): Promise<void> {
   });
   methodSelect.addEventListener("change", syncMethodFields);
   chaosToggle.addEventListener("change", () => ($<HTMLElement>("[data-chaos-fields]").hidden = !chaosToggle.checked));
+  rotatingToggle.addEventListener("change", switchFrame);
+  primarySelect.addEventListener("change", () => choosePair(0));
+  secondarySelect.addEventListener("change", () => choosePair(1));
   applyButton.addEventListener("click", apply);
   playButton.addEventListener("click", () => setPlaying(!playing));
   compareButton.addEventListener("click", compare);

@@ -122,3 +122,30 @@ test("V-25：どの大きさ・向きの間隔と、どんな速度（NaN・無�
   expect(rotatingFrame({ m: 1, p: [0, 0, 0], v: [0, 0, 0] }, { m: 1, p: [Number.MIN_VALUE, Number.MIN_VALUE, 0], v: [0, 0, 0] })).not.toBeNull();
   expect(returned).toBeGreaterThan(50);
 });
+
+test("V-26：z′ は相対位置 r × 相対速度 Δv の向き（大きさ 5 通り × 5 通り × 向き 3 通り × 3 通り。外積の途中があふれる・0 に落ちる大きさを含む）", () => {
+  // N-07 の範囲の端（間隔 10⁻⁹、相対位置・相対速度の成分 2 × 10⁶）と、範囲の外の有限の値（計算の途中で出うる）
+  const sizes = [1e-300, 1e-9, 1, 2e6, 1e200];
+  const speeds = [1e-100, 1e-9, 1, 2e6, 1e200];
+  const rDirs: V3[] = [[1, 0, 0], [1, 1, 0], [1, -2, 3]];
+  const vDirs: V3[] = [[0, 1, 0], [0, 1, 1], [3, 1, -2]]; // どれも rDirs のどれとも平行でない
+  const cross = (a: V3, b: V3): V3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  let checked = 0;
+  for (const size of sizes) for (const speed of speeds) for (const rd of rDirs) for (const vd of vDirs) {
+    const name = `間隔 ${size}・速さ ${speed}・向き ${rd} と ${vd}`;
+    const frame = rotatingFrame({ m: 1, p: [0, 0, 0], v: [0, 0, 0] }, { m: 1, p: rd.map((c) => c * size) as V3, v: vd.map((c) => c * speed) as V3 });
+    expect(frame, name).not.toBeNull();
+    // 期待値は、大きさを掛ける前の小さな整数の向きから求める
+    const c = cross(rd, vd);
+    const n = Math.hypot(...c);
+    frame!.axes[2].forEach((v, k) => expect(Math.abs(v - c[k] / n), name).toBeLessThan(1e-12));
+    checked++;
+  }
+  expect(checked).toBe(5 * 5 * 3 * 3);
+  // issue #16 に書いた再現の入力
+  const reported: [Body, Body, V3][] = [
+    [{ m: 1, p: [0, 0, 0], v: [0, 0, 0] }, { m: 1, p: [1e200, 0, 0], v: [0, 1e200, 1e200] }, [0, -Math.SQRT1_2, Math.SQRT1_2]],
+    [{ m: 1, p: [0, 0, 0], v: [0, 0, 0] }, { m: 1, p: [1e-300, 0, 0], v: [0, 0, 1e-100] }, [0, -1, 0]],
+  ];
+  for (const [primary, secondary, z] of reported) close(rotatingFrame(primary, secondary)!.axes[2], z);
+});

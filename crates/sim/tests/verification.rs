@@ -210,6 +210,166 @@ fn s05_invalid_initial_conditions_are_rejected() {
     assert_eq!(s.validate(), Err(StateError::Overlap));
 }
 
+/// N-07 計算できる値の範囲の端の格子（質量 3 通りの 3 天体 × 間隔 3 通り × 向き 3 通り × 速度 3 通り）で、
+/// 入力の検証を通り、初期状態の加速度・全エネルギー・全運動量・全角運動量・重心が有限で、加速度と位置エネルギーが 0 に落ちない
+#[test]
+fn n07_range_edges_are_accepted_and_finite() {
+    use sim::{MAX_COMPONENT, MAX_MASS, MIN_MASS, MIN_SEPARATION};
+    let masses = [MIN_MASS, 1.0, MAX_MASS];
+    let directions = [
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(1.0, 1.0, 0.0),
+        Vec3::new(1.0, -2.0, 3.0),
+    ];
+    let mut checked = 0;
+    for &m0 in &masses {
+        for &m1 in &masses {
+            for &m2 in &masses {
+                for dir in directions {
+                    let unit = dir * (1.0 / dir.norm());
+                    // いちばん大きい成分が 1 になる向き（両端を ±MAX_COMPONENT に置くため）
+                    let largest = dir.x.abs().max(dir.y.abs()).max(dir.z.abs());
+                    let corner = dir * (MAX_COMPONENT / largest);
+                    let placements = [
+                        (Vec3::default(), unit * (MIN_SEPARATION * (1.0 + 1e-6))),
+                        (Vec3::default(), unit),
+                        (corner * -1.0, corner),
+                    ];
+                    let speeds = [
+                        Vec3::default(),
+                        Vec3::new(0.0, MAX_COMPONENT, 0.0),
+                        Vec3::new(MAX_COMPONENT, -MAX_COMPONENT, MAX_COMPONENT),
+                    ];
+                    for (p0, p1) in placements {
+                        for v in speeds {
+                            let s = State {
+                                masses: vec![m0, m1, m2],
+                                positions: vec![p0, p1, Vec3::new(0.3, 0.7, -0.5)],
+                                velocities: vec![v, v * -1.0, Vec3::new(0.0, 0.0, MAX_COMPONENT)],
+                            };
+                            let name =
+                                format!("質量 {:?}・位置 {p0:?} {p1:?}・速度 {v:?}", s.masses);
+                            assert_eq!(s.validate(), Ok(()), "{name}");
+                            let finite =
+                                |v: Vec3| v.x.is_finite() && v.y.is_finite() && v.z.is_finite();
+                            for a in s.accelerations(&s.positions) {
+                                assert!(finite(a) && a.norm() > 0.0, "{name}：加速度 {a:?}");
+                            }
+                            // 位置エネルギーは、速度を 0 にした状態の全エネルギー（運動エネルギーとの和では丸めで消えることがあるため）
+                            let at_rest = State {
+                                velocities: vec![Vec3::default(); 3],
+                                ..s.clone()
+                            };
+                            let potential = at_rest.energy();
+                            assert!(
+                                s.energy().is_finite() && potential < 0.0 && potential.is_normal(),
+                                "{name}：エネルギー"
+                            );
+                            assert!(
+                                finite(s.momentum()) && finite(s.angular_momentum()),
+                                "{name}"
+                            );
+                            // 重心は Σ m_i r_i / Σ m_i（この範囲では直接計算してもあふれない）
+                            let total: f64 = s.masses.iter().sum();
+                            let expected = (0..3)
+                                .fold(Vec3::default(), |c, i| c + s.positions[i] * s.masses[i])
+                                * (1.0 / total);
+                            let com = s.center_of_mass();
+                            assert!(
+                                finite(com)
+                                    && (com - expected).norm() <= 1e-12 * (1.0 + expected.norm()),
+                                "{name}：重心 {com:?}"
+                            );
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(checked, 27 * 3 * 3 * 3);
+}
+
+/// N-07 範囲のすぐ外（端の隣の浮動小数点数）と、あふれる大きさ（1e308）は、理由をつけて拒否する
+#[test]
+fn n07_values_outside_range_are_rejected() {
+    use sim::{MAX_COMPONENT, MAX_MASS, MIN_MASS, StateError};
+    let two = || State {
+        masses: vec![1.0, 1.0],
+        positions: vec![Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0)],
+        velocities: vec![Vec3::default(), Vec3::default()],
+    };
+    for m in [
+        MIN_MASS.next_down(),
+        MAX_MASS.next_up(),
+        1e308,
+        f64::INFINITY,
+        f64::NAN,
+        0.0,
+    ] {
+        let mut s = two();
+        s.masses[1] = m;
+        assert_eq!(s.validate(), Err(StateError::Mass), "質量 {m}");
+    }
+    // 質量 1e308・1e308（issue #16 の入力）
+    let mut s = two();
+    s.masses = vec![1e308, 1e308];
+    assert_eq!(s.validate(), Err(StateError::Mass));
+    for c in [MAX_COMPONENT.next_up(), -MAX_COMPONENT.next_up(), 1e308] {
+        for k in 0..3 {
+            let set = |v: &mut Vec3| match k {
+                0 => v.x = c,
+                1 => v.y = c,
+                _ => v.z = c,
+            };
+            let mut s = two();
+            set(&mut s.positions[0]);
+            assert_eq!(s.validate(), Err(StateError::Range), "位置の成分 {k} = {c}");
+            let mut s = two();
+            set(&mut s.velocities[1]);
+            assert_eq!(s.validate(), Err(StateError::Range), "速度の成分 {k} = {c}");
+        }
+    }
+}
+
+/// N-08 重心は、質量の和があふれる・極小のときも Σ m_i r_i / Σ m_i に一致する（期待値は質量の比から求める）
+#[test]
+fn n08_center_of_mass_with_extreme_masses() {
+    let p = [Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 2.0, 0.0)];
+    for (m0, m1) in [
+        (1e308, 1e308),
+        (1e308, 1.0),
+        (1e-300, 3e-300),
+        (5e-324, 5e-324),
+        (1.0, 1e308),
+    ] {
+        let s = State {
+            masses: vec![m0, m1],
+            positions: p.to_vec(),
+            velocities: vec![Vec3::default(); 2],
+        };
+        let q = m1 / m0;
+        let mu = if q.is_finite() { q / (1.0 + q) } else { 1.0 };
+        let com = s.center_of_mass();
+        let expected = p[1] * mu;
+        assert!(
+            (com - expected).norm() < 1e-12,
+            "質量 {m0}・{m1}：重心 {com:?}、正しくは {expected:?}"
+        );
+    }
+    // 位置が極大でも、重心は有限で 2 天体の間にある
+    let s = State {
+        masses: vec![1.0, 3.0],
+        positions: vec![Vec3::new(-1e308, 0.0, 0.0), Vec3::new(1e308, 0.0, 0.0)],
+        velocities: vec![Vec3::default(); 2],
+    };
+    let com = s.center_of_mass();
+    assert!(
+        (com.x - 0.5e308).abs() < 1e295 && com.y == 0.0 && com.z == 0.0,
+        "{com:?}"
+    );
+}
+
 /// N-06 刻み幅を細かくすると、RK4 の誤差は小さくなる（4 次なので、刻み幅を 1/2 にすると誤差はおよそ 1/16）
 #[test]
 fn n06_smaller_step_reduces_rk4_error() {

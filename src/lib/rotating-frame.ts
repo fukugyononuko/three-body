@@ -59,9 +59,12 @@ export function rotatingFrame(primary: Body, secondary: Body): Frame | null {
   const origin = [0, 1, 2].map((k) => primary.p[k] + mu * (secondary.p[k] - primary.p[k])) as V3;
   const x = unit(r);
   if (!x) return null;
-  // z′ は、2 天体の相対運動の角運動量の向き。それが 0（正面からぶつかる向きの運動）か、あふれるときは、
-  // 静止座標系の z 軸（それも x′ と平行なら y 軸）の、x′ に垂直な成分を使う
-  const candidates: V3[] = [cross(r, sub(secondary.v, primary.v)), [0, 0, 1], [0, 1, 0]];
+  // z′ は、2 天体の相対運動の角運動量 r × Δv の向き。r と Δv をそれぞれ単位ベクトルにしてから外積をとる
+  // （そのまま掛けると、途中があふれたり 0 に落ちたりして向きを誤る。docs/plan.md §3：N-08）。
+  // 角運動量が 0（Δv が 0 か r と平行）か、Δv があふれるときは、静止座標系の z 軸（それも x′ と平行なら y 軸）の、
+  // x′ に垂直な成分を使う
+  const dv = unit(sub(secondary.v, primary.v));
+  const candidates: V3[] = [...(dv ? [cross(x, dv)] : []), [0, 0, 1], [0, 1, 0]];
   let z: V3 | null = null;
   for (const c of candidates) {
     const w = sub(c, scale(x, dot(c, x)));

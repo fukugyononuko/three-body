@@ -340,7 +340,7 @@ async function fakePositions(page: Page, values: number[]) {
 
 for (const [name, positions] of [
   ["主星と伴星が重なる", [0, 0, 0, 0, 0, 0, 1, 0, 0]],
-  ["主星と伴星の差があふれる", [-1e308, 0, 0, 1e308, 0, 0, 1, 0, 0]],
+  ["主星と伴星の差があふれる（1.15 倍の余白もあふれる）", [-1.7e308, 0, 0, 1.7e308, 0, 0, 1, 0, 0]],
 ] as [string, number[]][]) {
   test(`回転座標系：計算の途中で座標系が決まらなくなったとき（${name}）は、回転座標系に何も描かず理由を表示し、静止座標の点を混ぜない。静止座標系の表示の倍率は有限で正`, async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" }); // 自動で再生しない（初期状態だけを描く）

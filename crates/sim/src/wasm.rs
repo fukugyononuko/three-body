@@ -6,7 +6,10 @@
 use std::cell::RefCell;
 
 use crate::integrators::{Integrator, Method};
-use crate::{MAX_BODIES, MAX_COMPONENT, MAX_MASS, MIN_MASS, State, StateError, Vec3, scenarios};
+use crate::{
+    MAX_BODIES, MAX_COMPONENT, MAX_MASS, MIN_MASS, MIN_SEPARATION, State, StateError, Vec3,
+    scenarios,
+};
 
 const SLOTS: usize = 5;
 /// 1 天体あたりの入力：質量、x、y、z、vx、vy、vz
@@ -36,13 +39,14 @@ pub extern "C" fn sim_max_bodies() -> u32 {
     MAX_BODIES as u32
 }
 
-/// 計算できる値の範囲（N-07。画面の文に使う）：0 = 質量の下限、1 = 質量の上限、2 = 位置と速度の各成分の絶対値の上限
+/// 計算できる値の範囲（N-07。画面の文に使う）：0 = 質量の下限、1 = 質量の上限、2 = 位置と速度の各成分の絶対値の上限、3 = 2 天体の間隔の下限
 #[unsafe(no_mangle)]
 pub extern "C" fn sim_limit(kind: u32) -> f64 {
     match kind {
         0 => MIN_MASS,
         1 => MAX_MASS,
         2 => MAX_COMPONENT,
+        3 => MIN_SEPARATION,
         _ => f64::NAN,
     }
 }

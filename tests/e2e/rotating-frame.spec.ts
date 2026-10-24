@@ -149,3 +149,78 @@ test("V-26：z′ は相対位置 r × 相対速度 Δv の向き（大きさ 5 
   ];
   for (const [primary, secondary, z] of reported) close(rotatingFrame(primary, secondary)!.axes[2], z);
 });
+
+test("V-26：成分の比が極端でも（単位ベクトルにすると小さい成分が 0 に落ちる）、z′ は r × Δv の向き", () => {
+  const [max, min] = [Number.MAX_VALUE, Number.MIN_VALUE];
+  // [r, Δv, r × Δv の向き]。向きは、成分の積の符号から手で求めた
+  const cases: [V3, V3, V3][] = [
+    [[max, min, 0], [max, 0, 0], [0, 0, -1]], // PR #19 のレビュー 1 回目の入力
+    [[max, 0, 0], [max, min, 0], [0, 0, 1]],
+    [[max, min, min], [max, 0, 0], [0, Math.SQRT1_2, -Math.SQRT1_2]],
+    [[1, 1e-300, 0], [1, 0, 0], [0, 0, -1]],
+    [[1e-300, 0, 0], [1, 1e-300, 0], [0, 0, 1]],
+    [[0, max, 0], [min, max, 0], [0, 0, -1]],
+    [[1, 0, 0], [1, 0, 1e-320], [0, -1, 0]],
+  ];
+  for (const [r, dv, z] of cases) {
+    const frame = rotatingFrame({ m: 1, p: [0, 0, 0], v: [0, 0, 0] }, { m: 1, p: r, v: dv });
+    expect(frame, `r = ${r}、Δv = ${dv}`).not.toBeNull();
+    frame!.axes[2].forEach((v, k) => expect(Math.abs(v - z[k]), `r = ${r}、Δv = ${dv}：z′ = ${frame!.axes[2]}`).toBeLessThan(1e-12));
+  }
+});
+
+/** 浮動小数点数を、整数の仮数と指数に正確に分ける（x = m × 2^e） */
+function exact(x: number): [bigint, number] {
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, x);
+  const bits = view.getBigUint64(0);
+  const sign = bits >> 63n ? -1n : 1n;
+  const biased = Number((bits >> 52n) & 0x7ffn);
+  const fraction = bits & ((1n << 52n) - 1n);
+  return biased === 0 ? [sign * fraction, -1074] : [sign * (fraction | (1n << 52n)), biased - 1075];
+}
+/** a × b の向きを、整数の計算で正確に求める（外積が 0 なら null） */
+function exactCrossDirection(a: V3, b: V3): V3 | null {
+  const [ea, eb] = [a.map(exact), b.map(exact)];
+  const term = (i: number, j: number): [bigint, number] => [ea[i][0] * eb[j][0], ea[i][1] + eb[j][1]];
+  const minus = ([m1, e1]: [bigint, number], [m2, e2]: [bigint, number]): [bigint, number] => {
+    const e = Math.min(e1, e2);
+    return [(m1 << BigInt(e1 - e)) - (m2 << BigInt(e2 - e)), e];
+  };
+  const c = [minus(term(1, 2), term(2, 1)), minus(term(2, 0), term(0, 2)), minus(term(0, 1), term(1, 0))];
+  // 3 成分を同じ指数にそろえ、いちばん大きい成分の上位 60 ビットまでを Number にする
+  const e = Math.min(...c.map(([, x]) => x));
+  const aligned = c.map(([m, x]) => m << BigInt(x - e));
+  const bits = Math.max(...aligned.map((m) => (m < 0n ? -m : m).toString(2).length));
+  if (aligned.every((m) => m === 0n)) return null;
+  const shift = BigInt(Math.max(0, bits - 60));
+  const v = aligned.map((m) => Number(m >> shift)) as V3; // 負の数の右シフトは切り下げ。誤差は 2⁻⁶⁰ 程度
+  const n = Math.hypot(...v);
+  return v.map((x) => x / n) as V3;
+}
+
+test("V-26：成分の値 6 通り（±極大、極小、0 を含む）を r と Δv の 6 成分に入れた 46656 通りで、外積が 0 でなければ z′ は r × Δv の向き（整数で正確に求めた向きと比べる）", () => {
+  const values = [Number.MAX_VALUE, -1, Number.MIN_VALUE, 0, 1e-300, -1e200];
+  let checked = 0;
+  let total = 0;
+  const wrong: string[] = []; // 1 件ずつ expect すると遅いので、外れた入力を集めて最後に確かめる
+  for (const r0 of values) for (const r1 of values) for (const r2 of values)
+    for (const v0 of values) for (const v1 of values) for (const v2 of values) {
+      total++;
+      const [r, dv]: [V3, V3] = [[r0, r1, r2], [v0, v1, v2]];
+      const frame = rotatingFrame({ m: 1, p: [0, 0, 0], v: [0, 0, 0] }, { m: 1, p: r, v: dv });
+      // 間隔が 0 か、有限の数で表せない（√3 × 極大など）なら、座標系は決まらない
+      if (r.every((c) => c === 0) || !Number.isFinite(Math.hypot(...r))) {
+        if (frame) wrong.push(`r = ${r}：null でない`);
+        continue;
+      }
+      const expected = exactCrossDirection(r, dv);
+      if (!expected) continue; // 外積が 0 なら、代わりの軸を使う（向きの条件はない）
+      const z = frame?.axes[2];
+      if (!z || Math.max(...z.map((x, k) => Math.abs(x - expected[k]))) >= 1e-12) wrong.push(`r = ${r}、Δv = ${dv}：z′ = ${z}、正しくは ${expected}`);
+      checked++;
+    }
+  expect(wrong).toEqual([]);
+  expect(total).toBe(6 ** 6);
+  expect(checked).toBe(42462); // 残りは、座標系が決まらない 3672 通りと、外積が 0 の 522 通り
+});

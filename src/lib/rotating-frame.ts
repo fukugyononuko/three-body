@@ -40,6 +40,36 @@ const unit = (a: V3): V3 | null => {
   const u: V3 = [b[0] / n, b[1] / n, b[2] / n];
   return finite(u) ? u : null;
 };
+/** x = m × 2^e に分ける（|m| は 0.5 以上 1 未満。x = 0 なら [0, 0]）。x は有限 */
+const frexp = (x: number): [number, number] => {
+  if (x === 0) return [0, 0];
+  let e = Math.floor(Math.log2(Math.abs(x))) + 1;
+  // 2^−e は、e が極端だとあふれたり 0 に落ちたりするので、2 回に分けて掛ける
+  const h = Math.trunc(e / 2);
+  let m = x * 2 ** -h * 2 ** -(e - h);
+  while (Math.abs(m) >= 1) [m, e] = [m / 2, e + 1];
+  while (Math.abs(m) < 0.5) [m, e] = [m * 2, e - 1];
+  return [m, e];
+};
+/** 仮数と指数で表した 2 つの数の差 */
+const minus = ([m1, e1]: [number, number], [m2, e2]: [number, number]): [number, number] => {
+  if (m1 === 0) return [-m2, e2];
+  if (m2 === 0) return [m1, e1];
+  const e = Math.max(e1, e2);
+  return [m1 * 2 ** (e1 - e) - m2 * 2 ** (e2 - e), e];
+};
+/** a × b の向き（単位ベクトル）。a と b は有限。成分の積を仮数と指数に分けて求めるので、途中があふれたり、
+ * 小さい成分が 0 に落ちたりしない（a、b を先に単位ベクトルにすると、成分の比が極端なとき小さい成分が消える）。外積が 0 なら null */
+const crossDirection = (a: V3, b: V3): V3 | null => {
+  const [fa, fb] = [a.map(frexp), b.map(frexp)];
+  const term = (i: number, j: number): [number, number] => [fa[i][0] * fb[j][0], fa[i][1] + fb[j][1]];
+  const c = [minus(term(1, 2), term(2, 1)), minus(term(2, 0), term(0, 2)), minus(term(0, 1), term(1, 0))];
+  const exponents = c.filter(([m]) => m !== 0).map(([, e]) => e);
+  if (exponents.length === 0) return null;
+  const top = Math.max(...exponents);
+  // 0 の成分は 0 のまま（指数の差が大きいと 2^(e − top) があふれ、0 × ∞ = NaN になるため）
+  return unit(c.map(([m, e]) => (m === 0 ? 0 : m * 2 ** (e - top))) as V3);
+};
 /** 3 本の軸が正規直交か（許容 1e-12） */
 const orthonormal = ([x, y, z]: [V3, V3, V3]) =>
   [[x, x, 1], [y, y, 1], [z, z, 1], [x, y, 0], [y, z, 0], [z, x, 0]].every(
@@ -59,12 +89,12 @@ export function rotatingFrame(primary: Body, secondary: Body): Frame | null {
   const origin = [0, 1, 2].map((k) => primary.p[k] + mu * (secondary.p[k] - primary.p[k])) as V3;
   const x = unit(r);
   if (!x) return null;
-  // z′ は、2 天体の相対運動の角運動量 r × Δv の向き。r と Δv をそれぞれ単位ベクトルにしてから外積をとる
-  // （そのまま掛けると、途中があふれたり 0 に落ちたりして向きを誤る。docs/plan.md §3：N-08）。
+  // z′ は、2 天体の相対運動の角運動量 r × Δv の向き（crossDirection。docs/plan.md §3：N-08）。
   // 角運動量が 0（Δv が 0 か r と平行）か、Δv があふれるときは、静止座標系の z 軸（それも x′ と平行なら y 軸）の、
   // x′ に垂直な成分を使う
-  const dv = unit(sub(secondary.v, primary.v));
-  const candidates: V3[] = [...(dv ? [cross(x, dv)] : []), [0, 0, 1], [0, 1, 0]];
+  const dv = sub(secondary.v, primary.v);
+  const l = finite(dv) ? crossDirection(r, dv) : null;
+  const candidates: V3[] = [...(l ? [l] : []), [0, 0, 1], [0, 1, 0]];
   let z: V3 | null = null;
   for (const c of candidates) {
     const w = sub(c, scale(x, dot(c, x)));

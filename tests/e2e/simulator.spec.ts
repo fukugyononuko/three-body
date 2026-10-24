@@ -90,7 +90,7 @@ test("S-05：誤った初期値は理由を表示して受け付けない（質�
   await page.fill('input[name="b1-x"]', await page.locator('input[name="b0-x"]').inputValue());
   await page.fill('input[name="b1-y"]', await page.locator('input[name="b0-y"]').inputValue());
   await page.click("#apply");
-  await expect(page.locator("[data-message]")).toContainText("同じ位置");
+  await expect(page.locator("[data-message]")).toContainText("より小さい（重なっている）");
 });
 
 test("N-06：刻み幅を選べ、RK4 では刻み幅を細かくすると全エネルギーの誤差が小さくなる", async ({ page }) => {
@@ -428,6 +428,16 @@ test("V-26：N-07 の範囲の外は理由を表示して受け付けない。�
     const [, c] = (await reason.textContent())!.match(/各成分は −(\S+) 以上/)!;
     expect(c).toBe("10⁶");
     for (const text of ranges) expect(text).toContain(`−${c}〜${c}`);
+  }
+  // 間隔が下限より小さい異なる位置（5 × 10⁻¹⁰ と、下限のすぐ下）
+  for (const x of ["5e-10", "9.99999e-10"]) {
+    await page.selectOption("#preset", "0");
+    await setInitial(page, [[1, 0, 0, 0, 0, 0, 0], [1, Number(x), 0, 0, 0, 0, 0], [1, 1, 1, 0, 0, 0, 0]]);
+    await page.click("#apply");
+    await expect(reason, `間隔 ${x}`).toContainText("より小さい（重なっている）");
+    const [, s] = (await reason.textContent())!.match(/間隔が (\S+) より小さい/)!;
+    expect(s).toBe("10⁻⁹");
+    for (const text of ranges) expect(text).toContain(`間隔${text.includes("間隔は") ? "は" : ""} ${s} 以上`);
   }
 });
 

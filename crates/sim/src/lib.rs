@@ -180,13 +180,32 @@ impl State {
         Ok(())
     }
 
-    /// 重心（N-08）。質量の和は、あふれたり 0 に落ちたりするので、各質量を最大の質量で割った比から求める
+    /// 重心（N-08）。質量の和は、あふれたり 0 に落ちたりするので、各質量を最大の質量で割った比から求める。
+    /// 位置は成分ごとに、絶対値の最大で割ってから足す（極大の位置の和があふれないように）。重心は位置の凸結合なので、
+    /// 重みの和の丸めで外れた分は、各成分を位置の最小と最大の間に収めて直す。有限でない位置があれば、その成分は NaN
     pub fn center_of_mass(&self) -> Vec3 {
         let largest = self.masses.iter().fold(0.0_f64, |a, &m| a.max(m));
         let weights: Vec<f64> = self.masses.iter().map(|m| m / largest).collect();
         let total: f64 = weights.iter().sum();
-        (0..self.len()).fold(Vec3::default(), |c, i| {
-            c + self.positions[i] * (weights[i] / total)
-        })
+        let component = |get: fn(&Vec3) -> f64| {
+            let values: Vec<f64> = self.positions.iter().map(get).collect();
+            if !values.iter().all(|v| v.is_finite()) {
+                return f64::NAN;
+            }
+            let scale = values.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
+            if scale == 0.0 {
+                return 0.0;
+            }
+            let mean = values
+                .iter()
+                .zip(&weights)
+                .map(|(v, w)| v / scale * (w / total))
+                .sum::<f64>()
+                * scale;
+            let lo = values.iter().fold(f64::INFINITY, |a, &v| a.min(v));
+            let hi = values.iter().fold(f64::NEG_INFINITY, |a, &v| a.max(v));
+            mean.max(lo).min(hi)
+        };
+        Vec3::new(component(|p| p.x), component(|p| p.y), component(|p| p.z))
     }
 }

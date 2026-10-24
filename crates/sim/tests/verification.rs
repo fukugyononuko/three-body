@@ -370,6 +370,56 @@ fn n08_center_of_mass_with_extreme_masses() {
     );
 }
 
+/// N-08 重心は、どの有限の質量と位置でも、有限で、各成分が位置の最小と最大の間にある（重みの和の丸めであふれない）。
+/// 質量の組 6 通り × 位置の組 6 通り × 成分 3 通りの格子
+#[test]
+fn n08_center_of_mass_stays_between_positions() {
+    let max = f64::MAX;
+    let masses = [
+        [1.0, 1.0],
+        [1.0, 1e-12],
+        [5.043479608760427e-146, 2.434954721656867e-158], // PR #19 のレビュー 1 回目の入力
+        [1e308, 1e-308],
+        [f64::MIN_POSITIVE, 5e-324],
+        [3.0, 7.0],
+    ];
+    let pairs = [
+        (max, max),
+        (-max, -max),
+        (max, -max),
+        (max, max * 0.999),
+        (0.0, max),
+        (1e-300, 3e-300),
+    ];
+    let mut checked = 0;
+    for m in masses {
+        for (a, b) in pairs {
+            for k in 0..3 {
+                let place = |c: f64| match k {
+                    0 => Vec3::new(c, 1.0, 0.0),
+                    1 => Vec3::new(1.0, c, 0.0),
+                    _ => Vec3::new(0.0, 1.0, c),
+                };
+                let s = State {
+                    masses: m.to_vec(),
+                    positions: vec![place(a), place(b)],
+                    velocities: vec![Vec3::default(); 2],
+                };
+                let com = s.center_of_mass();
+                let c = [com.x, com.y, com.z][k];
+                let name = format!("質量 {m:?}・位置の成分 {k} = {a:e}, {b:e}：重心 {com:?}");
+                assert!(c.is_finite() && a.min(b) <= c && c <= a.max(b), "{name}");
+                // 同じ位置なら、重心はその位置
+                if a == b {
+                    assert_eq!(c, a, "{name}");
+                }
+                checked += 1;
+            }
+        }
+    }
+    assert_eq!(checked, 6 * 6 * 3);
+}
+
 /// N-06 刻み幅を細かくすると、RK4 の誤差は小さくなる（4 次なので、刻み幅を 1/2 にすると誤差はおよそ 1/16）
 #[test]
 fn n06_smaller_step_reduces_rk4_error() {

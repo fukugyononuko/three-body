@@ -85,12 +85,12 @@ test("S-05：誤った初期値は理由を表示して受け付けない（質�
   await ready(page);
   await page.fill('input[name="b1-m"]', "0");
   await page.click("#apply");
-  await expect(page.locator("[data-message]")).toContainText("質量は正の数");
+  await expect(page.locator("[data-message]")).toContainText("質量は 10⁻¹² 以上");
   await page.fill('input[name="b1-m"]', "1");
   await page.fill('input[name="b1-x"]', await page.locator('input[name="b0-x"]').inputValue());
   await page.fill('input[name="b1-y"]', await page.locator('input[name="b0-y"]').inputValue());
   await page.click("#apply");
-  await expect(page.locator("[data-message]")).toContainText("同じ位置");
+  await expect(page.locator("[data-message]")).toContainText("より小さい（重なっている）");
 });
 
 test("N-06：刻み幅を選べ、RK4 では刻み幅を細かくすると全エネルギーの誤差が小さくなる", async ({ page }) => {
@@ -307,28 +307,56 @@ test("回転座標系：プリセットごとに座標系・再生の速さ・�
   await expect(page.locator("#rotating")).not.toBeChecked();
 });
 
-test("回転座標系：座標系が決まらないとき（主星と伴星の差があふれる）は、回転座標系に何も描かず理由を表示し、静止座標の点を混ぜない", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" }); // 自動で再生しない（初期状態だけを描く）
-  await ready(page);
-  await setInitial(page, [
-    [1, -1e308, 0, 0, 0, 0, 0],
-    [1, 1e308, 0, 0, 0, 0, 0],
-    [1, 1, 0, 0, 0, 0, 0],
-  ]);
-  await page.check("#rotating");
-  await page.click("#apply");
-  await expect(page.locator("[data-message]")).toContainText("回転座標系");
-  const colored = () =>
-    page.locator("#orbits").evaluate((c: HTMLCanvasElement) => {
-      const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
-      let count = 0;
-      for (let i = 0; i < d.length; i += 4) if (Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]) > 60) count++;
-      return count;
-    });
-  expect(await colored()).toBe(0);
-  await page.uncheck("#rotating");
-  expect(await colored()).toBeGreaterThan(0);
-});
+/** キャンバスの色のついた画素（天体と軌跡）の数 */
+const colored = (page: Page) =>
+  page.locator("#orbits").evaluate((c: HTMLCanvasElement) => {
+    const d = c.getContext("2d")!.getImageData(0, 0, c.width, c.height).data;
+    let count = 0;
+    for (let i = 0; i < d.length; i += 4) if (Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]) > 60) count++;
+    return count;
+  });
+
+/** 計算の途中でしか起きない状態（N-07 の範囲の外の位置、2 天体が重なる）を作るため、WebAssembly の sim_positions の出力を、
+ * window.fakePositions（天体ごとの x, y, z）があればそれに書き換える。入力の検証（sim_init）は本物のまま通す */
+async function fakePositions(page: Page, values: number[]) {
+  await page.addInitScript((fake) => {
+    const instantiate = WebAssembly.instantiateStreaming;
+    WebAssembly.instantiateStreaming = async (source, imports) => {
+      const result = await instantiate(source, imports);
+      const real = result.instance.exports as Record<string, unknown>;
+      const positions = real.sim_positions as (slot: number) => number;
+      const exports = {
+        ...real,
+        sim_positions: (slot: number) => {
+          const address = positions(slot);
+          new Float64Array((real.memory as WebAssembly.Memory).buffer, address, fake.length).set(fake);
+          return address;
+        },
+      };
+      return { module: result.module, instance: { exports } as unknown as WebAssembly.Instance };
+    };
+  }, values);
+}
+
+for (const [name, positions] of [
+  ["主星と伴星が重なる", [0, 0, 0, 0, 0, 0, 1, 0, 0]],
+  ["主星と伴星の差があふれる（1.15 倍の余白もあふれる）", [-1.7e308, 0, 0, 1.7e308, 0, 0, 1, 0, 0]],
+] as [string, number[]][]) {
+  test(`回転座標系：計算の途中で座標系が決まらなくなったとき（${name}）は、回転座標系に何も描かず理由を表示し、静止座標の点を混ぜない。静止座標系の表示の倍率は有限で正`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" }); // 自動で再生しない（初期状態だけを描く）
+    await fakePositions(page, positions);
+    await ready(page);
+    await page.check("#rotating");
+    await page.click("#apply");
+    await expect(page.locator("[data-message]")).toContainText("回転座標系");
+    expect(await colored(page)).toBe(0);
+    await page.uncheck("#rotating");
+    expect(await colored(page)).toBeGreaterThan(0);
+    const half = Number(await page.locator("#orbits").getAttribute("data-view-half"));
+    const scale = Number(await page.locator("#orbits").getAttribute("data-scale"));
+    expect(Number.isFinite(half) && Number.isFinite(scale) && scale > 0, `半幅 ${half}、倍率 ${scale}`).toBe(true);
+  });
+}
 
 test("回転座標系：表示の範囲に L1〜L5 がすべて入る（回転座標系で始めるときも、あとで切り替えるときも）", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" }); // 自動で再生しない（初期状態の範囲を見る）
@@ -350,4 +378,78 @@ test("回転座標系：表示の範囲に L1〜L5 がすべて入る（回転�
   expect(await half()).toBeLessThan(farthest); // 静止座標系では天体だけから決める
   await page.check("#rotating");
   expect(await half()).toBeGreaterThanOrEqual(farthest);
+});
+
+test("V-26：N-07 の範囲の端の初期値（質量 10⁻¹²・10¹²、成分 ±10⁶、間隔 10⁻⁹）は受け付け、回転座標系が決まり、表示の範囲に L 点が入り、倍率は有限で正", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" }); // 自動で再生しない（初期状態を見る）
+  await ready(page);
+  await page.click("#remove-body");
+  await page.check("#rotating");
+  const cases: [string, number[][]][] = [
+    ["最大の間隔（3 成分）・最大の速さ", [[1e12, -1e6, 1e6, -1e6, 1e6, 1e6, -1e6], [1e-12, 1e6, -1e6, 1e6, -1e6, -1e6, 1e6]]],
+    ["最大の間隔（3 成分）・静止", [[1e-12, -1e6, 1e6, -1e6, 0, 0, 0], [1e12, 1e6, -1e6, 1e6, 0, 0, 0]]],
+    ["最小の間隔（軸の向き）", [[1e12, 0, 0, 0, 0, 0, 0], [1e12, 1.000001e-9, 0, 0, 0, 1e6, 0]]],
+    ["範囲の角での間隔 √2（斜め）", [[1e-12, 999999, 999999, 0, 0, 0, -1e6], [1e-12, 1e6, 1e6, 0, 0, 0, 1e6]]],
+  ];
+  for (const [name, rows] of cases) {
+    await setInitial(page, rows);
+    await page.click("#apply");
+    await expect(page.locator("[data-message]"), name).toHaveText("");
+    const [a, b] = rows.map((r) => r.slice(1, 4));
+    const separation = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    const half = Number(await page.locator("#orbits").getAttribute("data-view-half"));
+    const scale = Number(await page.locator("#orbits").getAttribute("data-scale"));
+    // L3（2 天体の重心から間隔のおよそ 1 倍以上の距離）が表示の範囲に入る
+    expect(Number.isFinite(half) && half >= separation, `${name}：半幅 ${half}`).toBe(true);
+    expect(Number.isFinite(scale) && scale > 0, `${name}：倍率 ${scale}`).toBe(true);
+    expect(await colored(page), name).toBeGreaterThan(0);
+  }
+});
+
+test("V-26：N-07 の範囲の外は理由を表示して受け付けない。理由とページの文の範囲は、計算部分の値（sim_limit）と一致する", async ({ page }) => {
+  await ready(page);
+  const reason = page.locator("[data-message]");
+  const ranges = await page.locator("[data-range]").allTextContents();
+  expect(ranges).toHaveLength(2);
+  for (const [field, value] of [["b0-m", "1e308"], ["b1-m", "1e-13"], ["b1-m", "1000000000001"]]) {
+    await page.selectOption("#preset", "0");
+    await page.fill(`input[name="${field}"]`, value);
+    await page.click("#apply");
+    await expect(reason, `${field} = ${value}`).toContainText("質量は");
+    const [, min, max] = (await reason.textContent())!.match(/質量は (\S+) 以上 (\S+) 以下/)!;
+    expect([min, max]).toEqual(["10⁻¹²", "10¹²"]);
+    for (const text of ranges) expect(text).toContain(`質量${text.includes("質量は") ? "は" : ""} ${min}〜${max}`);
+  }
+  for (const [field, value] of [["b0-x", "1000001"], ["b2-vz", "-1e7"], ["b1-y", "1e308"]]) {
+    await page.selectOption("#preset", "0");
+    await page.fill(`input[name="${field}"]`, value);
+    await page.click("#apply");
+    await expect(reason, `${field} = ${value}`).toContainText("位置と速度の各成分は");
+    const [, c] = (await reason.textContent())!.match(/各成分は −(\S+) 以上/)!;
+    expect(c).toBe("10⁶");
+    for (const text of ranges) expect(text).toContain(`−${c}〜${c}`);
+  }
+  // 間隔が下限より小さい異なる位置（5 × 10⁻¹⁰ と、下限のすぐ下）
+  for (const x of ["5e-10", "9.99999e-10"]) {
+    await page.selectOption("#preset", "0");
+    await setInitial(page, [[1, 0, 0, 0, 0, 0, 0], [1, Number(x), 0, 0, 0, 0, 0], [1, 1, 1, 0, 0, 0, 0]]);
+    await page.click("#apply");
+    await expect(reason, `間隔 ${x}`).toContainText("より小さい（重なっている）");
+    const [, s] = (await reason.textContent())!.match(/間隔が (\S+) より小さい/)!;
+    expect(s).toBe("10⁻⁹");
+    for (const text of ranges) expect(text).toContain(`間隔${text.includes("間隔は") ? "は" : ""} ${s} 以上`);
+  }
+});
+
+test("V-26：拡大・縮小を何回押しても、描画の倍率は有限で正", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await ready(page);
+  for (const button of ["#zoom-in", "#zoom-out"]) {
+    await page.click("#view-reset");
+    await page.locator(button).evaluate((b: HTMLButtonElement) => {
+      for (let i = 0; i < 4000; i++) b.click(); // 1.25 の 4000 乗は、倍率を有限の数の外に出す
+    });
+    const scale = Number(await page.locator("#orbits").getAttribute("data-scale"));
+    expect(Number.isFinite(scale) && scale > 0, `${button}：倍率 ${scale}`).toBe(true);
+  }
 });

@@ -6,7 +6,10 @@
 use std::cell::RefCell;
 
 use crate::integrators::{Integrator, Method};
-use crate::{MAX_BODIES, State, StateError, Vec3, scenarios};
+use crate::{
+    MAX_BODIES, MAX_COMPONENT, MAX_MASS, MIN_MASS, MIN_SEPARATION, State, StateError, Vec3,
+    scenarios,
+};
 
 const SLOTS: usize = 5;
 /// 1 天体あたりの入力：質量、x、y、z、vx、vy、vz
@@ -34,6 +37,18 @@ fn with_slot<R>(slot: u32, f: impl FnOnce(&mut Slot) -> R) -> Option<R> {
 #[unsafe(no_mangle)]
 pub extern "C" fn sim_max_bodies() -> u32 {
     MAX_BODIES as u32
+}
+
+/// 計算できる値の範囲（N-07。画面の文に使う）：0 = 質量の下限、1 = 質量の上限、2 = 位置と速度の各成分の絶対値の上限、3 = 2 天体の間隔の下限
+#[unsafe(no_mangle)]
+pub extern "C" fn sim_limit(kind: u32) -> f64 {
+    match kind {
+        0 => MIN_MASS,
+        1 => MAX_MASS,
+        2 => MAX_COMPONENT,
+        3 => MIN_SEPARATION,
+        _ => f64::NAN,
+    }
 }
 
 /// 入力用の配列のアドレス（JavaScript が Float64Array で書き込む）
@@ -76,7 +91,7 @@ pub extern "C" fn sim_preset_dt(scenario: u32) -> f64 {
 
 /// 入力用の配列の先頭 n 天体の初期値で計算器を用意する。method：0 = RK4、1 = RK45、2 = リープフロッグ法。
 /// dt は刻み幅（RK45 では最初に試す刻み幅）、tolerance は RK45 の許容誤差。
-/// 戻り値：1 = 成功、0 = 天体の数・積分法・刻み幅・許容誤差の誤り、2 = 質量の誤り、3 = 位置や速度が有限でない、4 = 天体が重なっている
+/// 戻り値：1 = 成功、0 = 天体の数・積分法・刻み幅・許容誤差の誤り、2 = 質量の誤り、3 = 位置や速度が有限でない、4 = 天体が重なっている、5 = 位置や速度の成分が範囲の外
 #[unsafe(no_mangle)]
 pub extern "C" fn sim_init(slot: u32, n: u32, method: u32, dt: f64, tolerance: f64) -> u32 {
     let n = n as usize;
@@ -106,6 +121,7 @@ pub extern "C" fn sim_init(slot: u32, n: u32, method: u32, dt: f64, tolerance: f
         Err(StateError::Mass) => return 2,
         Err(StateError::NotFinite) => return 3,
         Err(StateError::Overlap) => return 4,
+        Err(StateError::Range) => return 5,
         Err(StateError::Shape) => return 0,
     }
     with_slot(slot, |s| {

@@ -7,6 +7,7 @@ import { rotatingFrame, toFrame, type Frame, type V3 } from "../lib/rotating-fra
 interface SimExports {
   memory: WebAssembly.Memory;
   sim_max_bodies(): number;
+  sim_limit(kind: number): number;
   sim_input(): number;
   sim_load_preset(scenario: number): number;
   sim_preset_dt(scenario: number): number;
@@ -37,12 +38,24 @@ const MAIN = 0;
 const CHAOS = 1;
 const COMPARE = [2, 3, 4];
 const METHOD_NAMES = ["RK4", "RK45 (Dormand–Prince)", "Leapfrog"];
-const INIT_ERRORS: Record<number, string> = {
-  0: "天体の数・積分法・刻み幅・許容誤差を確かめてください（刻み幅と許容誤差は正の数）。",
-  2: "質量は正の数にしてください。",
-  3: "数値として読めない値があります。",
-  4: "2 つの天体が同じ位置にあります。位置をずらしてください。",
+const SUPERSCRIPT = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+/** 10 の累乗を「10⁻¹²」の形で書く（10 の累乗でなければ指数の表記） */
+const pow10 = (v: number) => {
+  const e = Math.round(Math.log10(v));
+  return 10 ** e === v ? `10${String(e).replace("-", "⁻").replace(/\d/g, (d) => SUPERSCRIPT[Number(d)])}` : v.toExponential();
 };
+/** sim_init の戻り値ごとの理由。範囲の値は計算部分（sim_limit、N-07）から読む */
+const initError = (code: number): string =>
+  ({
+    0: "天体の数・積分法・刻み幅・許容誤差を確かめてください（刻み幅と許容誤差は正の数）。",
+    2: `質量は ${pow10(wasm.sim_limit(0))} 以上 ${pow10(wasm.sim_limit(1))} 以下の数にしてください。`,
+    3: "数値として読めない値があります。",
+    4: `2 つの天体の間隔が ${pow10(wasm.sim_limit(3))} より小さい（重なっている）です。間隔を ${pow10(wasm.sim_limit(3))} 以上にしてください。`,
+    5: `位置と速度の各成分は −${pow10(wasm.sim_limit(2))} 以上 ${pow10(wasm.sim_limit(2))} 以下にしてください。`,
+  })[code] ?? "初期値を確かめてください。";
+/** 表示の半幅の範囲（N-08）。描画の倍率（画面の幅 ÷ 2 ÷ 半幅）と、半幅 × 0.8 の軸の長さが有限で正になるように収める */
+const MIN_HALF = 1e-300;
+const MAX_HALF = Number.MAX_VALUE / 4;
 const DEFAULT_VIEW = { az: -0.6, el: 0.45 };
 const FRAME_ERROR = "いまは回転座標系を決められません（主星と伴星が重なっているか、値が大きすぎます）。静止座標系に切り替えると表示できます。";
 
@@ -199,7 +212,7 @@ function initSlot(slot: number, values: number[], method: number, dt: number, to
   inputBuffer().set(values);
   const code = wasm.sim_init(slot, bodies, method, dt, tolerance);
   if (code !== 1) {
-    message.textContent = INIT_ERRORS[code] ?? "初期値を確かめてください。";
+    message.textContent = initError(code);
     return false;
   }
   return true;
@@ -251,7 +264,7 @@ function apply(): void {
   message.textContent = "";
   const values = readInputs();
   if (!values) {
-    message.textContent = INIT_ERRORS[3];
+    message.textContent = initError(3);
     return;
   }
   const { method, dt, tolerance } = settings();
@@ -291,7 +304,7 @@ function fitView(all = false): void {
     if (!isFinitePoint(p)) continue;
     need = Math.max(need, ...p.map((v) => Math.abs(v) * 1.15));
   }
-  view.half = Math.max(need, 0.5);
+  view.half = Math.min(Math.max(need, 0.5), MAX_HALF);
   orbits.dataset.viewHalf = String(view.half); // e2e テストで表示の範囲を確かめるため
 }
 
@@ -332,7 +345,7 @@ function drawOrbits(): void {
   const g = orbits.getContext("2d")!;
   g.fillStyle = css("--paper");
   g.fillRect(0, 0, orbits.width, orbits.height);
-  const half = view.half / view.zoom;
+  const half = Math.min(Math.max(view.half / view.zoom, MIN_HALF), MAX_HALF);
   const current = trails.map((trail) => trail.map((body) => shown(body[body.length - 1])));
   const marks = lagrangeMarks();
   // 回転座標系がいま決まらないときは、理由を表示する（決まったら消す）
@@ -340,7 +353,8 @@ function drawOrbits(): void {
   if (undetermined) message.textContent = FRAME_ERROR;
   else if (message.textContent === FRAME_ERROR) message.textContent = "";
   for (const panel of panels()) {
-    const scale = Math.min(panel.w, panel.h) / (2 * half);
+    const scale = Math.min(panel.w, panel.h) / 2 / half;
+    orbits.dataset.scale = String(scale); // e2e テストで描画の倍率を確かめるため（4 面とも同じ大きさ）
     const cx = panel.x + panel.w / 2;
     const cy = panel.y + panel.h / 2;
     const toScreen = (p: V3): [number, number] => {

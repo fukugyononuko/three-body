@@ -58,6 +58,14 @@ impl std::ops::Mul<f64> for Vec3 {
 /// 扱える天体の数の上限（色の見分けやすさを検証した配色が 8 色のため）
 pub const MAX_BODIES: usize = 8;
 
+/// 計算できる値の範囲（docs/plan.md §3：N-07）。質量の下限と上限
+pub const MIN_MASS: f64 = 1e-12;
+pub const MAX_MASS: f64 = 1e12;
+/// 位置と速度の各成分の絶対値の上限
+pub const MAX_COMPONENT: f64 = 1e6;
+/// 2 天体の間隔の下限（これより近いと重なっているとみなす）
+pub const MIN_SEPARATION: f64 = 1e-9;
+
 /// 入力の誤り（S-05）
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StateError {
@@ -67,6 +75,8 @@ pub enum StateError {
     Mass,
     /// 位置や速度に、有限でない数がある
     NotFinite,
+    /// 位置や速度の成分の絶対値が MAX_COMPONENT より大きい
+    Range,
     /// 2 つの天体が同じ位置にある
     Overlap,
 }
@@ -134,23 +144,35 @@ impl State {
         })
     }
 
-    /// 入力の検証（S-05）：天体は 2〜MAX_BODIES 個、質量は正の有限の数、位置と速度は有限の数、どの 2 天体も同じ位置にない
+    /// 入力の検証（S-05、N-07）：天体は 2〜MAX_BODIES 個、質量は MIN_MASS〜MAX_MASS、位置と速度は有限で各成分の絶対値が
+    /// MAX_COMPONENT 以下、どの 2 天体の間隔も MIN_SEPARATION 以上
     pub fn validate(&self) -> Result<(), StateError> {
         let n = self.len();
         if !(2..=MAX_BODIES).contains(&n) || self.positions.len() != n || self.velocities.len() != n
         {
             return Err(StateError::Shape);
         }
-        if self.masses.iter().any(|m| !(m.is_finite() && *m > 0.0)) {
+        if self
+            .masses
+            .iter()
+            .any(|m| !(MIN_MASS..=MAX_MASS).contains(m))
+        {
             return Err(StateError::Mass);
         }
-        let finite = |v: &Vec3| v.x.is_finite() && v.y.is_finite() && v.z.is_finite();
-        if !self.positions.iter().all(finite) || !self.velocities.iter().all(finite) {
+        let vectors = || self.positions.iter().chain(&self.velocities);
+        let components = |v: &Vec3| [v.x, v.y, v.z];
+        if !vectors().flat_map(components).all(f64::is_finite) {
             return Err(StateError::NotFinite);
+        }
+        if vectors()
+            .flat_map(components)
+            .any(|c| c.abs() > MAX_COMPONENT)
+        {
+            return Err(StateError::Range);
         }
         for i in 0..n {
             for j in (i + 1)..n {
-                if (self.positions[j] - self.positions[i]).norm() < 1e-9 {
+                if (self.positions[j] - self.positions[i]).norm() < MIN_SEPARATION {
                     return Err(StateError::Overlap);
                 }
             }
@@ -158,11 +180,32 @@ impl State {
         Ok(())
     }
 
-    /// 重心
+    /// 重心（N-08）。質量の和は、あふれたり 0 に落ちたりするので、各質量を最大の質量で割った比から求める。
+    /// 位置は成分ごとに、絶対値の最大で割ってから足す（極大の位置の和があふれないように）。重心は位置の凸結合なので、
+    /// 重みの和の丸めで外れた分は、各成分を位置の最小と最大の間に収めて直す。有限でない位置があれば、その成分は NaN
     pub fn center_of_mass(&self) -> Vec3 {
-        let total: f64 = self.masses.iter().sum();
-        (0..self.len()).fold(Vec3::default(), |c, i| {
-            c + self.positions[i] * (self.masses[i] / total)
-        })
+        let largest = self.masses.iter().fold(0.0_f64, |a, &m| a.max(m));
+        let weights: Vec<f64> = self.masses.iter().map(|m| m / largest).collect();
+        let total: f64 = weights.iter().sum();
+        let component = |get: fn(&Vec3) -> f64| {
+            let values: Vec<f64> = self.positions.iter().map(get).collect();
+            if !values.iter().all(|v| v.is_finite()) {
+                return f64::NAN;
+            }
+            let scale = values.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
+            if scale == 0.0 {
+                return 0.0;
+            }
+            let mean = values
+                .iter()
+                .zip(&weights)
+                .map(|(v, w)| v / scale * (w / total))
+                .sum::<f64>()
+                * scale;
+            let lo = values.iter().fold(f64::INFINITY, |a, &v| a.min(v));
+            let hi = values.iter().fold(f64::NEG_INFINITY, |a, &v| a.max(v));
+            mean.max(lo).min(hi)
+        };
+        Vec3::new(component(|p| p.x), component(|p| p.y), component(|p| p.z))
     }
 }
